@@ -174,10 +174,24 @@ clear message — that's the guardrail working, not an error.
 
 ---
 
-## Step 4b — Close a position (from the bracket order filling, or your own decision in Step 3)
+## Step 4b — Close a position
 
-**Do not log a closed trade with a second `journal-add` call.** The journal is append-only,
-so a second `journal-add` for the same position creates a brand new, unrelated trade record —
+**KORKOBAN never watches your account in real time.** It has no live connection monitoring
+fills — it only knows what you tell it, when you run a command. That means **a stop or
+target filling automatically in TWS is invisible to KORKOBAN** unless you log it yourself.
+This applies to every way a position can end, not just the ones you decide on:
+
+1. **Target filled automatically** — check `review-positions`' daily routine: if a position
+   you had open yesterday isn't showing up anymore (or TWS shows it closed), log it. Realized
+   R is normally the `2.5R` you already knew at entry, unless there was slippage.
+2. **Stop filled automatically** — same idea. Realized R is normally `-1R` exactly (the stop
+   sits at 1R of distance by construction), unless slippage moved the actual fill.
+3. **You closed it manually** (e.g. after a `FLAG` from Step 3) — check the real exit price in
+   TWS and compute `(exit_price - entry_price) / initial_risk` yourself (mirrored for shorts:
+   `(entry_price - exit_price) / initial_risk`) — the same formula `review-positions` uses.
+
+**Do not log any of these with a second `journal-add` call.** The journal is append-only, so
+a second `journal-add` for the same position creates a brand new, unrelated trade record —
 which counts as **a second trade toward `overtrading-status`**, even though you only ever
 opened one position. Use `journal-close` instead, with the `trade_id` from Step 4:
 
@@ -193,6 +207,10 @@ need a refresher). This is what updates the win-streak throttle counter, feeds t
 `report-weekly`'s expectancy/drawdown, and removes it from `review-positions`'s open list —
 all without touching your overtrading count. Trying to close the same `trade_id` twice, or a
 `trade_id` that doesn't exist, is rejected with a clear error.
+
+**Practical habit:** before running Step 1 (`scan`) each day, glance at TWS for anything that
+closed since your last session, and log it here first — an unresolved position from days ago
+will keep skewing `review-positions` and `report-weekly` until you close it.
 
 ---
 
