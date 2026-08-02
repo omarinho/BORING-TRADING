@@ -66,7 +66,15 @@ Two tiers, run separately, never merged:
 ```bash
 .venv/Scripts/python.exe -m korkoban.cli scan
 .venv/Scripts/python.exe -m korkoban.cli size --stop-distance 10 --symbol ES  # NetLiq fetched live
-.venv/Scripts/python.exe -m korkoban.cli journal-add ...
+.venv/Scripts/python.exe -m korkoban.cli journal-add \
+  --symbol ES --direction long --setup 1 \
+  --entry-price 5100 --stop-price 5085 --target-price 5137.5 \
+  --size 2 --risk-dollars 500 \
+  --checklist-gate-answer edge_based \
+  --reasoning "clean 20d breakout, volume 2.1x, matches the edge" \
+  --screenshot-path screenshots/es_20260802.png
+  # --checklist-gate-answer must be "edge_based" or "impulse" — anything else is rejected;
+  # "impulse" is still logged but excluded from win-rate/expectancy stats (the checklist gate)
 .venv/Scripts/python.exe -m korkoban.cli journal-eod-note "felt disciplined today"
 .venv/Scripts/python.exe -m korkoban.cli report-weekly --start 2026-07-27 --end 2026-08-02
 .venv/Scripts/python.exe -m korkoban.cli review-positions
