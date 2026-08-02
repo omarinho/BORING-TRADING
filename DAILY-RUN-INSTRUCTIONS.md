@@ -70,8 +70,67 @@ that's normal IBKR noise when the scanner closes after returning results, not a 
    ```
    NetLiq is read live from the account (no need to type it in). If the win-streak throttle
    is active, the command will tell you and automatically use the reduced risk_pct.
-3. **Execute the order yourself in TWS.** The system does not do this for you.
+3. **Execute the order yourself in TWS as a bracket order** — see the two worked examples
+   below.
 4. Take a screenshot of the entry (for the `--screenshot-path` field in the log entry).
+
+**One important caveat:** `entry`/`atr14` in the alert are computed from the prior session's
+already-closed bar. If the price you actually get filled at differs from the alert's `entry`
+by more than a few ticks, treat `stop`/`target` as reference distances (points away from
+entry), not literal prices to type in verbatim — a stop that's `entry - 1.5×atr14` should
+stay `your_fill - 1.5×atr14`, not the alert's original number, if your fill moved.
+
+### Worked example — LONG
+
+You see:
+```
+ALERT: MES setup=1 direction=long entry=5123.25 atr14=42.1 stop=5060.1 target=5281.12
+```
+
+1. Compute size (assume the command reports `units=2` for this NetLiq/account):
+   ```bash
+   .venv/Scripts/python.exe -m korkoban.cli size --stop-distance 63.15 --symbol MES
+   # -> units=2 risk_dollars=750.0 dollars_per_unit=315.75
+   ```
+   (`63.15` = `entry - stop` = `5123.25 - 5060.1`, i.e. the stop distance in points.)
+2. In TWS: right-click **MES** → **Trade** → **Bracket Order**.
+3. Fill in:
+   - **Action:** BUY, **Quantity:** `2` (from the `size` output).
+   - **Entry:** market, or a limit near the current price if you don't want to chase it.
+   - **Attached stop (SELL STOP):** `5060.1`.
+   - **Attached target (SELL LIMIT):** `5281.12`.
+4. Review the ticket, confirm quantity/prices, **Transmit**.
+5. The stop and target are now live as an OCO pair in TWS — whichever fills first
+   automatically cancels the other. KORKOBAN never touches this; from here it's entirely
+   TWS's native bracket-order mechanism.
+
+### Worked example — SHORT
+
+You see:
+```
+ALERT: MNQ setup=1 direction=short entry=18500.0 atr14=180.0 stop=18770.0 target=17825.0
+```
+
+1. Compute size (assume `units=1` for this NetLiq/account):
+   ```bash
+   .venv/Scripts/python.exe -m korkoban.cli size --stop-distance 270 --symbol MNQ
+   # -> units=1 risk_dollars=750.0 dollars_per_unit=540.0
+   ```
+   (`270` = `stop - entry` = `18770.0 - 18500.0`; for a short, the stop sits *above* entry.)
+2. In TWS: right-click **MNQ** → **Trade** → **Bracket Order**.
+3. Fill in:
+   - **Action:** SELL, **Quantity:** `1`.
+   - **Entry:** market, or a limit near the current price.
+   - **Attached stop (BUY STOP):** `18770.0` — above entry, since a short loses money if
+     price rises.
+   - **Attached target (BUY LIMIT):** `17825.0` — below entry, since a short profits if
+     price falls.
+4. Review, **Transmit**.
+
+The only real difference between long and short: for a long the stop is *below* entry and
+the target *above*; for a short it's flipped. `exits.compute_initial_stop`/`compute_target`
+already handle this — the `stop`/`target` values printed in the alert are always correct for
+that alert's direction, you don't need to flip anything yourself.
 
 ---
 
