@@ -8,13 +8,46 @@ directly; all IBKR access goes through `korkoban.ibkr_client.load_client`.
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from collections.abc import Callable
+from dataclasses import asdict
 from datetime import date, datetime, timedelta
+from pathlib import Path
+from typing import Protocol, cast
 
-from korkoban import config, exits, guardrails, journal, reports, sizing
+from korkoban import config, exits, guardrails, journal, reports, setups, sizing, universe
 from korkoban.guardrails import DEFAULT_CIRCUIT_BREAKER_STATE_PATH, DEFAULT_WIN_STREAK_STATE_PATH
 from korkoban.journal import DEFAULT_JOURNAL_PATH, TradeJournalEntry
+
+# Local structured-file persistence for the "last confirmed Setup 1 breakout per symbol"
+# state — same JSON-file pattern as guardrails.py's CircuitBreakerState/WinStreakState — so
+# a later scan can detect a Setup 2 pullback that follows a breakout confirmed on a prior day.
+DEFAULT_BREAKOUT_STATE_PATH = "data/breakout_state.json"
+
+
+class _ConnectedClient(Protocol):
+    """Structural interface cli.py needs from a connected client — satisfied by the real
+    IBKRClient's read-only methods and by test doubles alike. Used by scan, review-positions,
+    and size (for its optional live Net Liquidation Value read)."""
+
+    def historical_futures_bars(
+        self, symbol: str, duration: str = "2 Y", bar_size: str = "1 day"
+    ) -> list[setups.Bar]: ...
+
+    def historical_stock_bars(
+        self, symbol: str, duration: str = "2 Y", bar_size: str = "1 day"
+    ) -> list[setups.Bar]: ...
+
+    def stock_candidate_symbols(self) -> list[str]: ...
+
+    def stock_bid_ask_spread_pct(self, symbol: str) -> float: ...
+
+    def account_net_liquidation(self) -> float: ...
+
+    def stock_average_daily_volume(self, symbol: str) -> float: ...
+
+    def disconnect(self) -> None: ...
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -26,11 +59,36 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     scan_parser.add_argument("--ibkr-input", default="ibkr.input")
     scan_parser.add_argument("--circuit-breaker-path", default=DEFAULT_CIRCUIT_BREAKER_STATE_PATH)
+    scan_parser.add_argument("--breakout-state-path", default=DEFAULT_BREAKOUT_STATE_PATH)
+    scan_parser.add_argument("--journal-path", default=DEFAULT_JOURNAL_PATH)
 
     size_parser = subparsers.add_parser("size", help="Compute a position size")
-    size_parser.add_argument("--net-liq", type=float, required=True)
+    size_parser.add_argument(
+        "--net-liq",
+        type=float,
+        default=None,
+        help=(
+            "Account Net Liquidation Value (REQ-006). If omitted, fetched live via "
+            "IBKRClient.account_net_liquidation() (read-only account summary snapshot)."
+        ),
+    )
+    size_parser.add_argument("--ibkr-input", default="ibkr.input")
     size_parser.add_argument("--stop-distance", type=float, required=True)
-    size_parser.add_argument("--point-value", type=float, required=True)
+    size_parser.add_argument(
+        "--point-value",
+        type=float,
+        default=None,
+        help="Overrides --symbol's derived point value if both are given",
+    )
+    size_parser.add_argument(
+        "--symbol",
+        default=None,
+        help=(
+            "Derives point value via sizing.point_value_for() for a futures symbol, or 1.0 "
+            "for anything else (stocks: 1 point = $1/share, per INSTRUCTIONS.md's sizing "
+            "formula). Required unless --point-value is given directly."
+        ),
+    )
     size_parser.add_argument("--risk-pct", type=float, default=config.RISK_PCT_DEFAULT)
     size_parser.add_argument("--win-streak-path", default=DEFAULT_WIN_STREAK_STATE_PATH)
 
@@ -89,15 +147,63 @@ def _build_parser() -> argparse.ArgumentParser:
     win_streak_parser.add_argument("action", choices=["status"])
     win_streak_parser.add_argument("--state-path", default=DEFAULT_WIN_STREAK_STATE_PATH)
 
+    review_parser = subparsers.add_parser(
+        "review-positions",
+        help="Flag open trades that hit the time-stop without reaching 1R (REQ-009)",
+    )
+    review_parser.add_argument("--ibkr-input", default="ibkr.input")
+    review_parser.add_argument("--journal-path", default=DEFAULT_JOURNAL_PATH)
+
+    overtrading_parser = subparsers.add_parser(
+        "overtrading-status",
+        help="Check trade count in the current rolling calendar month (REQ-012)",
+    )
+    overtrading_parser.add_argument("--journal-path", default=DEFAULT_JOURNAL_PATH)
+    overtrading_parser.add_argument(
+        "--threshold", type=int, default=config.OVERTRADING_THRESHOLD_DEFAULT
+    )
+
     return parser
 
 
-def _cmd_size(args: argparse.Namespace) -> int:
+def _resolve_point_value(args: argparse.Namespace) -> float | None:
+    if args.point_value is not None:
+        return float(args.point_value)
+    if args.symbol is None:
+        return None
+    if args.symbol in config.FUTURES_POINT_VALUES:
+        return sizing.point_value_for(args.symbol)
+    return 1.0  # stocks: 1 point = $1/share, per INSTRUCTIONS.md's sizing formula
+
+
+def _cmd_size(args: argparse.Namespace, client_factory: Callable[[str], object]) -> int:
+    point_value = _resolve_point_value(args)
+    if point_value is None:
+        print("Either --point-value or --symbol is required.", file=sys.stderr)
+        return 1
+
+    if args.net_liq is not None:
+        net_liq = float(args.net_liq)
+    else:
+        # REQ-006: capital base is account Net Liquidation Value from IBKR, not raw buying
+        # power — fetched live only when --net-liq isn't given explicitly, so a caller who
+        # already knows their NetLiq never has to connect to the Gateway just to size a trade.
+        try:
+            client = client_factory(args.ibkr_input)
+        except ConnectionError as exc:
+            print(f"Could not connect to IBKR Gateway: {exc}", file=sys.stderr)
+            return 1
+        connected_client = cast(_ConnectedClient, client)
+        try:
+            net_liq = connected_client.account_net_liquidation()
+        finally:
+            connected_client.disconnect()
+
     try:
         result = sizing.compute_size(
-            net_liq=args.net_liq,
+            net_liq=net_liq,
             stop_distance_points=args.stop_distance,
-            point_value=args.point_value,
+            point_value=point_value,
             risk_pct=args.risk_pct,
         )
     except ValueError as exc:
@@ -119,9 +225,9 @@ def _cmd_size(args: argparse.Namespace) -> int:
         # Bounds enforcement below only applies to raw user input (already validated above);
         # a guardrail-reduced value may legitimately fall below RISK_PCT_MIN.
         result = sizing.compute_size(
-            net_liq=args.net_liq,
+            net_liq=net_liq,
             stop_distance_points=args.stop_distance,
-            point_value=args.point_value,
+            point_value=point_value,
             risk_pct=effective_risk_pct,
             enforce_risk_pct_bounds=False,
         )
@@ -220,28 +326,156 @@ def _default_client_factory(path: str) -> object:
     return load_client(path)
 
 
+def _load_breakout_state(path: str) -> dict[str, setups.Setup1Signal]:
+    """Reads the last confirmed Setup 1 breakout per symbol; a missing file means none yet."""
+    file_path = Path(path)
+    if not file_path.exists():
+        return {}
+    with file_path.open("r", encoding="utf-8") as f:
+        raw = json.load(f)
+    return {symbol: setups.Setup1Signal(**value) for symbol, value in raw.items()}
+
+
+def _save_breakout_state(path: str, state: dict[str, setups.Setup1Signal]) -> None:
+    file_path = Path(path)
+    file_path.parent.mkdir(parents=True, exist_ok=True)
+    with file_path.open("w", encoding="utf-8") as f:
+        json.dump({symbol: asdict(signal) for symbol, signal in state.items()}, f)
+
+
+_Alert = tuple[str, str, setups.Setup1Signal | setups.Setup2Signal]
+
+
+def _scan_futures_universe(client: object, state: dict[str, setups.Setup1Signal]) -> list[_Alert]:
+    """Fixed futures universe (REQ-002/003 end-to-end). `state` (last confirmed Setup 1
+    breakout per symbol) is shared with `_scan_stock_universe` and persisted once by the
+    caller — mutated in place here, not loaded/saved locally.
+    """
+    scan_client = cast(_ConnectedClient, client)
+    alerts: list[_Alert] = []
+
+    for symbol in universe.FUTURES_UNIVERSE:
+        bars = scan_client.historical_futures_bars(symbol)
+        try:
+            breakout = setups.is_breakout(bars)
+        except ValueError:
+            # Insufficient trailing history for a fresh Setup-1 read on this symbol — Setup 2
+            # has a lower data requirement (see setups.is_pullback), so still check it below
+            # rather than skipping the symbol outright.
+            breakout = None
+
+        if breakout is not None:
+            state[symbol] = breakout
+            alerts.append((symbol, "1", breakout))
+            continue
+
+        pullback = setups.is_pullback(bars, state.get(symbol))
+        if pullback is not None:
+            alerts.append((symbol, "2", pullback))
+
+    return alerts
+
+
+def _stock_candidates(scan_client: _ConnectedClient) -> list[universe.StockCandidate]:
+    """Builds StockCandidate rows from live scanner symbols + per-symbol spread/ADV reads.
+    A symbol with no live quote or no volume history right now is skipped, not fatal — the
+    scan still covers everything it can get real data for.
+    """
+    candidates: list[universe.StockCandidate] = []
+    for symbol in scan_client.stock_candidate_symbols():
+        try:
+            spread_pct = scan_client.stock_bid_ask_spread_pct(symbol)
+            avg_daily_volume = scan_client.stock_average_daily_volume(symbol)
+        except ValueError:
+            continue
+        candidates.append(
+            universe.StockCandidate(
+                symbol=symbol,
+                spread_pct=spread_pct,
+                avg_daily_volume=avg_daily_volume,
+                asset_class="stock",
+            )
+        )
+    return candidates
+
+
+def _scan_stock_universe(client: object, state: dict[str, setups.Setup1Signal]) -> list[_Alert]:
+    """Live scanner candidates -> universe.filter_stock_universe() eligibility -> the same
+    setup-detection loop as futures. `state` is shared with `_scan_futures_universe` (symbol
+    strings don't collide across the two universes) and persisted once by the caller.
+    """
+    scan_client = cast(_ConnectedClient, client)
+    alerts: list[_Alert] = []
+
+    for candidate in universe.filter_stock_universe(_stock_candidates(scan_client)):
+        bars = scan_client.historical_stock_bars(candidate.symbol)
+        try:
+            breakout = setups.is_breakout(bars)
+        except ValueError:
+            breakout = None
+
+        if breakout is not None:
+            state[candidate.symbol] = breakout
+            alerts.append((candidate.symbol, "1", breakout))
+            continue
+
+        pullback = setups.is_pullback(bars, state.get(candidate.symbol))
+        if pullback is not None:
+            alerts.append((candidate.symbol, "2", pullback))
+
+    return alerts
+
+
 def _cmd_scan(args: argparse.Namespace, client_factory: Callable[[str], object]) -> int:
     try:
-        client_factory(args.ibkr_input)
+        client = client_factory(args.ibkr_input)
     except ConnectionError as exc:
         print(f"Could not connect to IBKR Gateway: {exc}", file=sys.stderr)
         return 1
 
-    breaker_state = guardrails.load_circuit_breaker_state(args.circuit_breaker_path)
-    if not guardrails.can_alert(breaker_state, now=datetime.now()):
-        assert breaker_state.paused_since is not None  # can_alert() False implies this
-        resumes_at = breaker_state.paused_since + timedelta(days=config.EMOTIONAL_PAUSE_DAYS)
-        print(
-            "Alerts suppressed: emotional circuit breaker is active until "
-            f"{resumes_at.isoformat()} — no new setup alert will be surfaced during the pause."
-        )
-        return 0
+    try:
+        breaker_state = guardrails.load_circuit_breaker_state(args.circuit_breaker_path)
+        if not guardrails.can_alert(breaker_state, now=datetime.now()):
+            assert breaker_state.paused_since is not None  # can_alert() False implies this
+            resumes_at = breaker_state.paused_since + timedelta(days=config.EMOTIONAL_PAUSE_DAYS)
+            print(
+                "Alerts suppressed: emotional circuit breaker is active until "
+                f"{resumes_at.isoformat()} — no new setup alert will be surfaced during "
+                "the pause."
+            )
+            return 0
 
-    # Full scan wiring (universe -> historical_bars -> setups.is_breakout/is_pullback) is not
-    # exercised in this environment without a live paper Gateway; connecting successfully is
-    # confirmed here, the scan loop itself is covered by the integration tier.
-    print("Connected to IBKR Gateway (read-only) — scan not yet wired end-to-end.")
-    return 0
+        breakout_state = _load_breakout_state(args.breakout_state_path)
+        alerts = _scan_futures_universe(client, breakout_state) + _scan_stock_universe(
+            client, breakout_state
+        )
+        _save_breakout_state(args.breakout_state_path, breakout_state)
+
+        # REQ-015: every completed scan is logged so reports._zero_signal_day_count() has
+        # real data — a scan suppressed by the circuit breaker above never reaches this
+        # line, since the system isn't actually looking for signals during a pause.
+        journal.append_scan_log(
+            args.journal_path, timestamp=datetime.now(), signal_found=bool(alerts)
+        )
+
+        if not alerts:
+            print("No signals — 0 candidates matched Setup 1 or Setup 2 this scan.")
+            return 0
+
+        for symbol, setup_id, signal in alerts:
+            stop = exits.compute_initial_stop(
+                entry_price=signal.entry_price, atr14=signal.atr14, direction=signal.direction
+            )
+            target = exits.compute_target(
+                entry_price=signal.entry_price, initial_stop=stop, direction=signal.direction
+            )
+            print(
+                f"ALERT: {symbol} setup={setup_id} direction={signal.direction} "
+                f"entry={signal.entry_price} atr14={signal.atr14} stop={stop} target={target}"
+            )
+        return 0
+    finally:
+        cast(_ConnectedClient, client).disconnect()
 
 
 def _cmd_circuit_breaker(args: argparse.Namespace) -> int:
@@ -287,6 +521,84 @@ def _cmd_win_streak(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_review_positions(args: argparse.Namespace, client_factory: Callable[[str], object]) -> int:
+    try:
+        client = client_factory(args.ibkr_input)
+    except ConnectionError as exc:
+        print(f"Could not connect to IBKR Gateway: {exc}", file=sys.stderr)
+        return 1
+    scan_client = cast(_ConnectedClient, client)
+
+    try:
+        open_trades = [
+            entry
+            for entry in journal.read_all_entries(args.journal_path)
+            if entry.entry_type == "trade" and entry.realized_r is None
+        ]
+        if not open_trades:
+            print("No open positions to review.")
+            return 0
+
+        for entry in open_trades:
+            assert entry.symbol is not None
+            assert entry.entry_price is not None
+            assert entry.stop_price is not None
+            assert entry.direction is not None
+
+            bars = (
+                scan_client.historical_futures_bars(entry.symbol)
+                if entry.symbol in universe.FUTURES_UNIVERSE
+                else scan_client.historical_stock_bars(entry.symbol)
+            )
+            if not bars:
+                print(f"{entry.symbol}: no market data available, skipping time-stop check.")
+                continue
+
+            entry_date = datetime.fromisoformat(entry.timestamp).date()
+            bars_since_entry = sum(1 for bar in bars if date.fromisoformat(bar.date) > entry_date)
+            initial_risk = abs(entry.entry_price - entry.stop_price)
+            current_close = bars[-1].close
+            r_now = (
+                (current_close - entry.entry_price) / initial_risk
+                if entry.direction == "long"
+                else (entry.entry_price - current_close) / initial_risk
+            )
+
+            if exits.check_time_stop(bars_since_entry=bars_since_entry, realized_r=r_now):
+                print(
+                    f"FLAG: {entry.symbol} entered {entry.timestamp} — {bars_since_entry} "
+                    f"bar(s) elapsed without reaching 1R (currently {r_now:.2f}R) — flag "
+                    "for manual closure review."
+                )
+            else:
+                print(
+                    f"OK: {entry.symbol} entered {entry.timestamp} — {bars_since_entry} "
+                    f"bar(s) elapsed, currently {r_now:.2f}R."
+                )
+        return 0
+    finally:
+        scan_client.disconnect()
+
+
+def _cmd_overtrading_status(args: argparse.Namespace) -> int:
+    now = datetime.now()
+    trade_timestamps = [
+        datetime.fromisoformat(entry.timestamp)
+        for entry in journal.read_all_entries(args.journal_path)
+        if entry.entry_type == "trade"
+    ]
+    count = guardrails.count_trades_in_month(trade_timestamps, year=now.year, month=now.month)
+
+    if guardrails.check_overtrading(count, threshold=args.threshold):
+        print(
+            f"Overtrading warning: {count} trade(s) logged this month, over the threshold of "
+            f"{args.threshold} — flagged only, the human still executes every trade manually."
+        )
+    else:
+        print(f"Trade count this month: {count} (threshold {args.threshold})")
+    return 0
+
+
 def main(
     argv: list[str] | None = None,
     client_factory: Callable[[str], object] = _default_client_factory,
@@ -296,7 +608,7 @@ def main(
     if args.command == "scan":
         return _cmd_scan(args, client_factory)
     if args.command == "size":
-        return _cmd_size(args)
+        return _cmd_size(args, client_factory)
     if args.command == "journal-add":
         return _cmd_journal_add(args)
     if args.command == "journal-eod-note":
@@ -307,6 +619,10 @@ def main(
         return _cmd_circuit_breaker(args)
     if args.command == "win-streak":
         return _cmd_win_streak(args)
+    if args.command == "review-positions":
+        return _cmd_review_positions(args, client_factory)
+    if args.command == "overtrading-status":
+        return _cmd_overtrading_status(args)
     raise AssertionError(f"unhandled command {args.command!r}")  # unreachable — argparse validates
 
 

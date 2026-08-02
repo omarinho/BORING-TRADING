@@ -55,6 +55,17 @@ STOCK_ADV_MIN_SHARES: float = 5_000_000  # strict >
 FUTURES_SYMBOLS: tuple[str, ...] = ("ES", "NQ", "YM", "RTY", "GC", "CL")
 MICRO_FUTURES_SYMBOLS: tuple[str, ...] = ("MES", "MNQ", "MYM", "M2K", "MGC", "MCL")
 
+# Exchange code IBKR uses for each symbol's continuous front-month contract (ContFuture) —
+# single definition site, ibkr_client.py reads from here, never inlines (REQ-019).
+FUTURES_EXCHANGES: dict[str, str] = {
+    "ES": "CME",
+    "NQ": "CME",
+    "YM": "CBOT",
+    "RTY": "CME",
+    "GC": "COMEX",
+    "CL": "NYMEX",
+}
+
 # Point value (USD per 1.00 point move) for every futures contract in the fixed universe,
 # including its micro equivalent. This is the single definition site — sizing.py and
 # universe.py read from here, never inline (REQ-021).

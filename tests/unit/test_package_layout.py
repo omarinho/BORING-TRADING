@@ -6,6 +6,7 @@ Some of these modules are owned by other agents and may not exist yet when this 
 first run — a clear file-not-found failure for those is expected CORRECT_RED, not a bug
 here (see task notes for TC-019-01 / TC-019-03).
 """
+
 from __future__ import annotations
 
 from pathlib import Path

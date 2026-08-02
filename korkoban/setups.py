@@ -52,8 +52,7 @@ def _atr_series(bars: list[Bar], period: int) -> list[float]:
     # atr_series[k] is the trailing `period`-day average true range ending at bars[k+period].
     true_ranges = [_true_range(bars[i], bars[i - 1].close) for i in range(1, len(bars))]
     return [
-        sum(true_ranges[end - period : end]) / period
-        for end in range(period, len(true_ranges) + 1)
+        sum(true_ranges[end - period : end]) / period for end in range(period, len(true_ranges) + 1)
     ]
 
 

@@ -29,8 +29,7 @@ def compute_size(
     # already validated the base risk_pct may pass enforce_risk_pct_bounds=False.
     if enforce_risk_pct_bounds and not (config.RISK_PCT_MIN <= risk_pct <= config.RISK_PCT_MAX):
         raise ValueError(
-            f"risk_pct {risk_pct} outside bounds "
-            f"[{config.RISK_PCT_MIN}, {config.RISK_PCT_MAX}]"
+            f"risk_pct {risk_pct} outside bounds " f"[{config.RISK_PCT_MIN}, {config.RISK_PCT_MAX}]"
         )
 
     risk_dollars = net_liq * risk_pct

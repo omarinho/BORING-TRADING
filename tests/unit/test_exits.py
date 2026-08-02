@@ -72,9 +72,9 @@ def test_tc_007_06_structural_audit_no_widen_or_recompute_and_no_prior_stop_para
     forbidden_param_fragments = ("existing_stop", "current_stop", "prior_stop")
     for param_name in signature.parameters:
         for fragment in forbidden_param_fragments:
-            assert fragment not in param_name, (
-                f"compute_initial_stop must not accept a parameter like {param_name}"
-            )
+            assert (
+                fragment not in param_name
+            ), f"compute_initial_stop must not accept a parameter like {param_name}"
 
 
 def test_tc_008_01_target_long_case() -> None:

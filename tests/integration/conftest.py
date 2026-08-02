@@ -3,6 +3,7 @@
 A missing Gateway in this dev environment is an expected, not exceptional, condition —
 this is the one deliberate exception to "no silent except" in this codebase.
 """
+
 from __future__ import annotations
 
 from collections.abc import Iterator
@@ -22,7 +23,6 @@ class GatewayConnection(NamedTuple):
 
 @pytest.fixture
 def ibkr_gateway() -> Iterator[GatewayConnection]:
-    client = load_client()
     captured_kwargs: dict[str, object] = {}
     original_connect = IB.connect
 
@@ -48,8 +48,12 @@ def ibkr_gateway() -> Iterator[GatewayConnection]:
         original_connect(self, host, port, clientId, timeout, readonly, account)
 
     try:
+        # load_client() connects internally (see korkoban/ibkr_client.py) — the spy must be
+        # patched in before that call, not after, or this double-connects the same IB
+        # instance (the real bug that caused every real Gateway run to fail with
+        # "Socket disconnect" after load_client() was fixed to self-connect).
         with patch.object(IB, "connect", _spy_connect):
-            client.connect()
+            client = load_client()
     except Exception as exc:  # deliberate: missing Gateway is expected here, not a real failure
         pytest.skip(f"no paper IB Gateway reachable: {exc}")
 

@@ -10,7 +10,11 @@ from korkoban.reports import WeeklyReport, compute_weekly_report, print_weekly_r
 
 
 def _trade(
-    day: int, month: int = 1, year: int = 2026, hour: int = 10, realized_r: float = 1.0,
+    day: int,
+    month: int = 1,
+    year: int = 2026,
+    hour: int = 10,
+    realized_r: float = 1.0,
     counted_in_stats: bool = True,
 ) -> TradeJournalEntry:
     return TradeJournalEntry(

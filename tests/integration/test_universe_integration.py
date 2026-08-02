@@ -13,6 +13,7 @@ function that was never part of the package layout. The import is deferred insid
 body (rather than at module level) so that, in this dev environment, the ibkr_gateway
 fixture's no-Gateway skip fires first rather than surfacing an import-time collection error.
 """
+
 from __future__ import annotations
 
 import inspect
@@ -37,5 +38,5 @@ def test_tc_005_08_builds_filtered_stock_list_from_live_data_no_hardcoded_ticker
     assert universe.filter_stock_universe([]) == []
 
     source = inspect.getsource(universe)
-    assert "= [\"" not in source  # no hardcoded ticker-array literal feeding the universe
+    assert '= ["' not in source  # no hardcoded ticker-array literal feeding the universe
     assert "= ['" not in source

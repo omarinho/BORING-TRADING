@@ -10,6 +10,9 @@ data/circuit_breaker_state.json
 # Win-streak throttle state — local, per-user, not source
 data/win_streak_state.json
 
+# Last confirmed Setup 1 breakout per symbol — local, per-user, not source
+data/breakout_state.json
+
 # Python
 __pycache__/
 *.pyc

@@ -56,9 +56,7 @@ def _max_drawdown(entries: list[TradeJournalEntry]) -> tuple[float, float]:
 def _forced_trade_count(
     entries: list[TradeJournalEntry], start: date, end: date, threshold: int
 ) -> int:
-    all_trades = sorted(
-        (e for e in entries if e.entry_type == "trade"), key=lambda e: e.timestamp
-    )
+    all_trades = sorted((e for e in entries if e.entry_type == "trade"), key=lambda e: e.timestamp)
     months: dict[tuple[int, int], list[TradeJournalEntry]] = {}
     for trade in all_trades:
         ts = datetime.fromisoformat(trade.timestamp)

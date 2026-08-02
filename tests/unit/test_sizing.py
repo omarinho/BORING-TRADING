@@ -98,9 +98,9 @@ def test_tc_021_02_point_value_sourced_only_via_point_value_for() -> None:
     remainder = full_source.replace(source, "")
     for point_value in config.FUTURES_POINT_VALUES.values():
         literal = repr(point_value)
-        assert literal not in remainder, (
-            f"found suspicious point-value literal {literal} outside point_value_for"
-        )
+        assert (
+            literal not in remainder
+        ), f"found suspicious point-value literal {literal} outside point_value_for"
 
 
 def test_point_value_for_looks_up_config_dict() -> None:

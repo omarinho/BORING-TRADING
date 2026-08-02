@@ -2,6 +2,7 @@
 """KORKOBAN is a rule-based system with zero LLM/AI SDK dependency — audit the whole repo
 source (and pyproject.toml) for any such import or dependency string.
 """
+
 from __future__ import annotations
 
 from pathlib import Path

@@ -2,6 +2,7 @@
 """Audits .gitignore for the KORKOBAN-era entries: ibkr.input and the journal data path are
 present, and the entries from the prior LLM-driven trigger-file setup are gone.
 """
+
 from __future__ import annotations
 
 from pathlib import Path

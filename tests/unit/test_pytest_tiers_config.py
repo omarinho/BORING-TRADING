@@ -3,6 +3,7 @@
 integration marker, the marker is registered so pytest never warns about it, and every
 tests/integration/ test function does carry the marker.
 """
+
 from __future__ import annotations
 
 from pathlib import Path

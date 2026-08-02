@@ -2,6 +2,7 @@
 """Tests for korkoban.config: ibkr.input parsing/defaults, futures point-value mapping,
 and the .gitignore / hardcoded-connect-literal structural audits required by REQ-016.
 """
+
 from __future__ import annotations
 
 from pathlib import Path
