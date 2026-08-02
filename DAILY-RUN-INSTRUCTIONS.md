@@ -146,7 +146,7 @@ window. This also doesn't close anything on its own — it's a flag for manual r
 
 ---
 
-## Step 4 — Log any trade you executed today
+## Step 4 — Log any trade you opened today
 
 ```bash
 .venv/Scripts/python.exe -m korkoban.cli journal-add \
@@ -158,18 +158,41 @@ window. This also doesn't close anything on its own — it's a flag for manual r
   --screenshot-path "screenshots/es_2026-08-02.png"
 ```
 
+This prints `logged trade entry for ES (trade_id=..., counted_in_stats=...)` — **write down
+that `trade_id`** (or keep the terminal open), you need it to close the trade later.
+
 Notes on the fields:
 - `--checklist-gate-answer` only accepts `edge_based` or `impulse`. If it's `impulse` (you
   entered out of a need for action, not because of the edge), the trade is still logged but
   **doesn't count** toward win-rate/expectancy statistics — this keeps the tracked edge honest.
 - `--reasoning` and `--screenshot-path` are required, no exceptions.
-- If you closed a prior trade today, add `--realized-r <number>` (in R units, not dollars)
-  when logging it — that's what updates the winning-streak counter.
 - If you want the optional management plan (scale 50% at 1.8R, trail remainder at 1.5×ATR),
   add `--with-management-plan`.
 
 If the emotional circuit breaker is active, this command will reject the log entry with a
 clear message — that's the guardrail working, not an error.
+
+---
+
+## Step 4b — Close a position (from the bracket order filling, or your own decision in Step 3)
+
+**Do not log a closed trade with a second `journal-add` call.** The journal is append-only,
+so a second `journal-add` for the same position creates a brand new, unrelated trade record —
+which counts as **a second trade toward `overtrading-status`**, even though you only ever
+opened one position. Use `journal-close` instead, with the `trade_id` from Step 4:
+
+```bash
+.venv/Scripts/python.exe -m korkoban.cli journal-close \
+  --trade-id 086230d5-4cf6-450b-9273-47c9ded2d1e3 \
+  --realized-r 2.0 \
+  --reasoning "hit target"
+```
+
+`--realized-r` is in R units, not dollars (see the "What is 1R?" note further down if you
+need a refresher). This is what updates the win-streak throttle counter, feeds the trade into
+`report-weekly`'s expectancy/drawdown, and removes it from `review-positions`'s open list —
+all without touching your overtrading count. Trying to close the same `trade_id` twice, or a
+`trade_id` that doesn't exist, is rejected with a clear error.
 
 ---
 
