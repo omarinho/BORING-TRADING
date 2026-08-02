@@ -20,29 +20,50 @@ class WeeklyReport:
     zero_signal_day_count: int
 
 
-def _counted_trades_chronological(entries: list[TradeJournalEntry]) -> list[TradeJournalEntry]:
-    trades = [e for e in entries if e.entry_type == "trade" and e.counted_in_stats is True]
-    return sorted(trades, key=lambda e: e.timestamp)
+def _resolved_trades_chronological(entries: list[TradeJournalEntry]) -> list[tuple[str, float]]:
+    """(timestamp, realized_r) for every counted, resolved trade — whether resolved in one
+    shot (realized_r already on the opening "trade" entry) or via a separate "trade_close"
+    entry referencing the same trade_id (see journal.append_trade_close). Ordered by
+    resolution time. A "trade_close" is never itself a trade — it resolves one.
+    """
+    opens_by_id = {
+        e.trade_id: e for e in entries if e.entry_type == "trade" and e.trade_id is not None
+    }
+    resolved: list[tuple[str, float]] = []
+
+    for e in entries:
+        if e.entry_type == "trade" and e.realized_r is not None and e.counted_in_stats is True:
+            resolved.append((e.timestamp, e.realized_r))
+
+    for e in entries:
+        if e.entry_type != "trade_close" or e.realized_r is None or e.trade_id is None:
+            continue
+        open_entry = opens_by_id.get(e.trade_id)
+        if open_entry is None or open_entry.realized_r is not None:
+            continue  # unknown trade_id, or already resolved at open — avoid double counting
+        if open_entry.counted_in_stats is True:
+            resolved.append((e.timestamp, e.realized_r))
+
+    return sorted(resolved, key=lambda t: t[0])
 
 
 def _expectancy_r(entries: list[TradeJournalEntry]) -> float:
     # "most recent" is judged over the whole journal, not clipped to the report window
-    trades = _counted_trades_chronological(entries)
-    window = trades[-EXPECTANCY_WINDOW_TRADE_COUNT:]
+    resolved = _resolved_trades_chronological(entries)
+    window = resolved[-EXPECTANCY_WINDOW_TRADE_COUNT:]
     if not window:
         return 0.0
-    realized_rs = [t.realized_r for t in window if t.realized_r is not None]
-    return sum(realized_rs) / len(realized_rs) if realized_rs else 0.0
+    return sum(r for _, r in window) / len(window)
 
 
 def _max_drawdown(entries: list[TradeJournalEntry]) -> tuple[float, float]:
-    trades = _counted_trades_chronological(entries)
+    resolved = _resolved_trades_chronological(entries)
     cumulative = 0.0
     peak = 0.0
     max_drawdown_r = 0.0
     max_drawdown_pct = 0.0
-    for trade in trades:
-        cumulative += trade.realized_r if trade.realized_r is not None else 0.0
+    for _, realized_r in resolved:
+        cumulative += realized_r
         peak = max(peak, cumulative)
         drawdown = peak - cumulative
         if drawdown > max_drawdown_r:

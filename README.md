@@ -75,6 +75,9 @@ Two tiers, run separately, never merged:
   --screenshot-path screenshots/es_20260802.png
   # --checklist-gate-answer must be "edge_based" or "impulse" — anything else is rejected;
   # "impulse" is still logged but excluded from win-rate/expectancy stats (the checklist gate)
+  # prints trade_id=<uuid> — save it, you need it to close the trade later
+.venv/Scripts/python.exe -m korkoban.cli journal-close \
+  --trade-id <uuid from journal-add> --realized-r 2.0 --reasoning "hit target"
 .venv/Scripts/python.exe -m korkoban.cli journal-eod-note "felt disciplined today"
 .venv/Scripts/python.exe -m korkoban.cli report-weekly --start 2026-07-27 --end 2026-08-02
 .venv/Scripts/python.exe -m korkoban.cli review-positions
@@ -109,6 +112,25 @@ completed scan also logs a `scan_log` entry to the trade journal (`signal_found`
 so `report-weekly`'s "zero-signal day count" reflects real scan history instead of always
 reading 0 — a scan suppressed by the circuit breaker is not logged, since the system isn't
 actually looking for signals during a pause.
+
+### `journal-add` / `journal-close` — opening and closing a trade are two different events
+
+`journal-add` opens a trade and assigns it a unique `trade_id` (printed in the confirmation
+line — save it). `review-positions` treats that trade as open until it's explicitly resolved.
+
+**Resolving it is `journal-close --trade-id <id> --realized-r <R> --reasoning <why>`, not a
+second `journal-add` call.** The journal is append-only, so there's no way to edit the
+original entry — but logging a second full `journal-add` for the same position would create
+an entirely new, unrelated `"trade"` record, which **counts as a second trade toward
+`overtrading-status`/`report-weekly`'s forced-trade-count**, even though you only ever opened
+one position. `journal-close` appends a `"trade_close"` entry referencing the same `trade_id`
+instead — it resolves the open position (removes it from `review-positions`, feeds
+`realized_r` into expectancy/drawdown, updates the win-streak throttle) without ever counting
+as a trade of its own.
+
+(`journal-add --realized-r <R>` directly, in one shot, is still supported — for logging a
+trade you already know the outcome of, e.g. backfilling history. That path never needs
+`journal-close`, since it isn't "open" to begin with.)
 
 ### `review-positions` — time-stop enforcement (REQ-009)
 

@@ -123,6 +123,19 @@ def _build_parser() -> argparse.ArgumentParser:
     add_parser.add_argument("--circuit-breaker-path", default=DEFAULT_CIRCUIT_BREAKER_STATE_PATH)
     add_parser.add_argument("--win-streak-path", default=DEFAULT_WIN_STREAK_STATE_PATH)
 
+    close_parser = subparsers.add_parser(
+        "journal-close",
+        help="Resolve a previously-opened trade by trade_id — not a new trade, doesn't "
+        "count toward overtrading",
+    )
+    close_parser.add_argument("--trade-id", required=True)
+    close_parser.add_argument("--realized-r", type=float, required=True)
+    close_parser.add_argument(
+        "--reasoning", required=True, help="Free-text rationale for closing now"
+    )
+    close_parser.add_argument("--journal-path", default=DEFAULT_JOURNAL_PATH)
+    close_parser.add_argument("--win-streak-path", default=DEFAULT_WIN_STREAK_STATE_PATH)
+
     eod_parser = subparsers.add_parser(
         "journal-eod-note", help="Append the one-per-day EOD emotional-state note"
     )
@@ -295,7 +308,46 @@ def _cmd_journal_add(args: argparse.Namespace) -> int:
         )
         guardrails.save_win_streak_state(args.win_streak_path, updated_win_streak_state)
 
-    print(f"logged trade entry for {saved.symbol} (counted_in_stats={saved.counted_in_stats})")
+    print(
+        f"logged trade entry for {saved.symbol} (trade_id={saved.trade_id}, "
+        f"counted_in_stats={saved.counted_in_stats})"
+    )
+    return 0
+
+
+def _cmd_journal_close(args: argparse.Namespace) -> int:
+    entries = journal.read_all_entries(args.journal_path)
+    opened = next(
+        (e for e in entries if e.entry_type == "trade" and e.trade_id == args.trade_id), None
+    )
+    if opened is None:
+        print(f"No trade found with trade-id {args.trade_id!r}.", file=sys.stderr)
+        return 1
+
+    already_closed = opened.realized_r is not None or any(
+        e.entry_type == "trade_close" and e.trade_id == args.trade_id for e in entries
+    )
+    if already_closed:
+        print(f"Trade {args.trade_id!r} is already closed.", file=sys.stderr)
+        return 1
+
+    journal.append_trade_close(
+        args.journal_path,
+        trade_id=args.trade_id,
+        realized_r=args.realized_r,
+        reasoning=args.reasoning,
+        timestamp=datetime.now(),
+    )
+
+    # Win-streak throttle (REQ-010): mirrors journal-add's --realized-r wiring — the trade's
+    # outcome becomes known exactly here, at close, for a trade opened via journal-add.
+    win_streak_state = guardrails.load_win_streak_state(args.win_streak_path)
+    updated_win_streak_state = guardrails.update_win_streak_state(
+        win_streak_state, realized_r=args.realized_r
+    )
+    guardrails.save_win_streak_state(args.win_streak_path, updated_win_streak_state)
+
+    print(f"closed trade {args.trade_id} (realized_r={args.realized_r})")
     return 0
 
 
@@ -530,10 +582,14 @@ def _cmd_review_positions(args: argparse.Namespace, client_factory: Callable[[st
     scan_client = cast(_ConnectedClient, client)
 
     try:
+        all_entries = journal.read_all_entries(args.journal_path)
+        closed_trade_ids = {e.trade_id for e in all_entries if e.entry_type == "trade_close"}
         open_trades = [
             entry
-            for entry in journal.read_all_entries(args.journal_path)
-            if entry.entry_type == "trade" and entry.realized_r is None
+            for entry in all_entries
+            if entry.entry_type == "trade"
+            and entry.realized_r is None
+            and entry.trade_id not in closed_trade_ids
         ]
         if not open_trades:
             print("No open positions to review.")
@@ -611,6 +667,8 @@ def main(
         return _cmd_size(args, client_factory)
     if args.command == "journal-add":
         return _cmd_journal_add(args)
+    if args.command == "journal-close":
+        return _cmd_journal_close(args)
     if args.command == "journal-eod-note":
         return _cmd_journal_eod_note(args)
     if args.command == "report-weekly":

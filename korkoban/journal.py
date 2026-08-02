@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import uuid
 from dataclasses import asdict, dataclass, replace
 from datetime import date, datetime
 from pathlib import Path
@@ -14,8 +15,12 @@ DEFAULT_JOURNAL_PATH: str = "data/trade_journal.jsonl"
 
 @dataclass(frozen=True)
 class TradeJournalEntry:
-    entry_type: str  # "trade" | "eod_note" | "scan_log"
+    entry_type: str  # "trade" | "trade_close" | "eod_note" | "scan_log"
     timestamp: str  # ISO-8601
+    # Unique per logical trade, assigned when the position is opened (entry_type="trade").
+    # A "trade_close" entry carries the same trade_id to resolve it without creating a second
+    # "trade" — closing a position is not a new trade and must not count toward overtrading.
+    trade_id: str | None = None
     symbol: str | None = None
     direction: str | None = None
     setup: str | None = None
@@ -47,9 +52,27 @@ def _append_line(path: str, entry: TradeJournalEntry) -> None:
 
 def append_trade_entry(path: str, entry: TradeJournalEntry) -> TradeJournalEntry:
     gate_answer = guardrails.validate_checklist_gate_answer(entry.checklist_gate_answer)
-    final_entry = replace(entry, counted_in_stats=guardrails.counted_in_stats(gate_answer))
+    final_entry = replace(
+        entry, trade_id=str(uuid.uuid4()), counted_in_stats=guardrails.counted_in_stats(gate_answer)
+    )
     _append_line(path, final_entry)
     return final_entry
+
+
+def append_trade_close(
+    path: str, trade_id: str, realized_r: float, reasoning: str, timestamp: datetime
+) -> TradeJournalEntry:
+    """Resolves a previously-opened trade (by trade_id) without creating a new "trade" entry
+    — closing a position is not a new trade and must not count toward overtrading."""
+    entry = TradeJournalEntry(
+        entry_type="trade_close",
+        timestamp=timestamp.isoformat(),
+        trade_id=trade_id,
+        realized_r=realized_r,
+        reasoning=reasoning,
+    )
+    _append_line(path, entry)
+    return entry
 
 
 def append_eod_note(path: str, day: date, note: str) -> TradeJournalEntry:

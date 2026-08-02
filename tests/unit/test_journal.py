@@ -11,6 +11,7 @@ from korkoban.journal import (
     TradeJournalEntry,
     append_eod_note,
     append_scan_log,
+    append_trade_close,
     append_trade_entry,
     read_all_entries,
 )
@@ -164,3 +165,45 @@ def test_trade_journal_entry_management_plan_and_reasoning_default_to_none(
     assert got.scale_out_fraction is None
     assert got.scale_out_r_multiple is None
     assert got.trail_atr_multiple is None
+
+
+# ─── trade_id / journal-close (proper close mechanism, distinct from a "new trade") ─────────
+
+
+def test_append_trade_entry_assigns_a_trade_id(tmp_path: Path) -> None:
+    path = str(tmp_path / "journal.jsonl")
+    persisted = append_trade_entry(path, _trade_entry())
+    assert persisted.trade_id is not None
+    assert isinstance(persisted.trade_id, str)
+    assert persisted.trade_id != ""
+
+
+def test_append_trade_entry_assigns_distinct_trade_ids(tmp_path: Path) -> None:
+    path = str(tmp_path / "journal.jsonl")
+    first = append_trade_entry(path, _trade_entry(symbol="ES"))
+    second = append_trade_entry(path, _trade_entry(symbol="NQ"))
+    assert first.trade_id != second.trade_id
+
+
+def test_append_trade_close_writes_a_trade_close_entry(tmp_path: Path) -> None:
+    path = str(tmp_path / "journal.jsonl")
+    opened = append_trade_entry(path, _trade_entry(realized_r=None))
+    assert opened.trade_id is not None
+
+    closed = append_trade_close(
+        path,
+        trade_id=opened.trade_id,
+        realized_r=1.5,
+        reasoning="hit target",
+        timestamp=datetime(2026, 1, 10, 16, 0, 0),
+    )
+
+    assert closed.entry_type == "trade_close"
+    assert closed.trade_id == opened.trade_id
+    assert closed.realized_r == 1.5
+    assert closed.reasoning == "hit target"
+
+    entries = read_all_entries(path)
+    assert len(entries) == 2
+    assert entries[0].entry_type == "trade"
+    assert entries[1].entry_type == "trade_close"

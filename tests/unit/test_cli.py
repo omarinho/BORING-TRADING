@@ -1090,6 +1090,173 @@ def test_review_positions_ignores_closed_trades(
     assert "No open positions" in captured.out
 
 
+# ─── journal-close (proper close mechanism, distinct from journal-add's one-shot
+# --realized-r) — resolves a previously-opened trade by trade_id without counting as a new
+# trade toward overtrading, and updates win-streak state exactly like journal-add's own
+# --realized-r wiring does ──────────────────────────────────────────────────────────────────
+
+
+def test_journal_add_prints_trade_id(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    journal_path = tmp_path / "trade_journal.jsonl"
+    exit_code = cli.main(_journal_add_base_args(journal_path))
+    assert exit_code == 0
+    captured = capsys.readouterr()
+
+    entry = journal.read_all_entries(str(journal_path))[0]
+    assert entry.trade_id is not None
+    assert entry.trade_id in captured.out
+
+
+def test_journal_close_resolves_a_previously_opened_trade(tmp_path: Path) -> None:
+    journal_path = tmp_path / "trade_journal.jsonl"
+    exit_code = cli.main(_journal_add_base_args(journal_path))
+    assert exit_code == 0
+    opened = journal.read_all_entries(str(journal_path))[0]
+    assert opened.trade_id is not None
+
+    exit_code = cli.main(
+        [
+            "journal-close",
+            "--trade-id",
+            opened.trade_id,
+            "--realized-r",
+            "1.5",
+            "--reasoning",
+            "hit target",
+            "--journal-path",
+            str(journal_path),
+            "--win-streak-path",
+            str(tmp_path / "win_streak_state.json"),
+        ]
+    )
+    assert exit_code == 0
+
+    entries = journal.read_all_entries(str(journal_path))
+    assert len(entries) == 2
+    close_entry = entries[1]
+    assert close_entry.entry_type == "trade_close"
+    assert close_entry.trade_id == opened.trade_id
+    assert close_entry.realized_r == 1.5
+
+
+def test_journal_close_rejects_unknown_trade_id(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    journal_path = tmp_path / "trade_journal.jsonl"
+    exit_code = cli.main(
+        [
+            "journal-close",
+            "--trade-id",
+            "does-not-exist",
+            "--realized-r",
+            "1.0",
+            "--reasoning",
+            "n/a",
+            "--journal-path",
+            str(journal_path),
+        ]
+    )
+    captured = capsys.readouterr()
+    assert exit_code != 0
+    assert "no trade" in captured.err.lower() or "not found" in captured.err.lower()
+
+
+def test_journal_close_rejects_already_closed_trade(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    journal_path = tmp_path / "trade_journal.jsonl"
+    cli.main(_journal_add_base_args(journal_path))
+    opened = journal.read_all_entries(str(journal_path))[0]
+    assert opened.trade_id is not None
+
+    close_args = [
+        "journal-close",
+        "--trade-id",
+        opened.trade_id,
+        "--realized-r",
+        "1.0",
+        "--reasoning",
+        "closed",
+        "--journal-path",
+        str(journal_path),
+        "--win-streak-path",
+        str(tmp_path / "win_streak_state.json"),
+    ]
+    first_close = cli.main(close_args)
+    assert first_close == 0
+
+    second_close = cli.main(close_args)
+    captured = capsys.readouterr()
+    assert second_close != 0
+    assert "already closed" in captured.err.lower()
+
+
+def test_journal_close_updates_win_streak_state(tmp_path: Path) -> None:
+    journal_path = tmp_path / "trade_journal.jsonl"
+    win_streak_path = tmp_path / "win_streak_state.json"
+
+    trade_ids: list[str] = []
+    for _ in range(config.WIN_STREAK_TRIGGER_COUNT):
+        cli.main([*_journal_add_base_args(journal_path), "--win-streak-path", str(win_streak_path)])
+        last_trade_id = journal.read_all_entries(str(journal_path))[-1].trade_id
+        assert last_trade_id is not None
+        trade_ids.append(last_trade_id)
+
+    for trade_id in trade_ids:
+        exit_code = cli.main(
+            [
+                "journal-close",
+                "--trade-id",
+                trade_id,
+                "--realized-r",
+                "1.0",
+                "--reasoning",
+                "hit target",
+                "--journal-path",
+                str(journal_path),
+                "--win-streak-path",
+                str(win_streak_path),
+            ]
+        )
+        assert exit_code == 0
+
+    state = guardrails.load_win_streak_state(str(win_streak_path))
+    assert state.throttle_trades_remaining == config.WIN_STREAK_THROTTLE_TRADE_COUNT
+
+
+def test_review_positions_treats_journal_close_as_resolved(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    journal_path = tmp_path / "trade_journal.jsonl"
+    cli.main(_journal_add_base_args(journal_path))
+    opened = journal.read_all_entries(str(journal_path))[0]
+    assert opened.trade_id is not None
+
+    cli.main(
+        [
+            "journal-close",
+            "--trade-id",
+            opened.trade_id,
+            "--realized-r",
+            "1.0",
+            "--reasoning",
+            "hit target",
+            "--journal-path",
+            str(journal_path),
+            "--win-streak-path",
+            str(tmp_path / "win_streak_state.json"),
+        ]
+    )
+
+    exit_code = cli.main(
+        ["review-positions", "--journal-path", str(journal_path)],
+        client_factory=lambda _path: _FakeScanClient(),
+    )
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert "No open positions" in captured.out
+
+
 def test_review_positions_flags_stale_position_past_time_stop(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
