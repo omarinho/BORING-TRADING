@@ -209,13 +209,23 @@ shorten the pause — that's the guardrail working as designed.
 
 ## Weekly review
 
+**Run this on Fridays** (or the last business day of the week, on a short week), as part of
+the same after-6PM session as Step 1-5 — not a separate daily habit.
+
 ```bash
 .venv/Scripts/python.exe -m korkoban.cli report-weekly --start YYYY-MM-DD --end YYYY-MM-DD
 ```
 
-Gives you: expectancy in R (over the last 50 counted trades), max drawdown, count of trades
-forced by overtrading, and zero-signal days in the range — a high number here is good, it
-means the system is being selective.
+`--start`/`--end` are inclusive. On a Friday, use that week's Monday as `--start` and
+today's date as `--end` — e.g. running it Friday 2026-08-07, the range is:
+
+```bash
+.venv/Scripts/python.exe -m korkoban.cli report-weekly --start 2026-08-03 --end 2026-08-07
+```
+
+Gives you: expectancy in R (over the last 50 counted trades — not clipped to just this
+week), max drawdown, count of trades forced by overtrading, and zero-signal days in the
+range — a high number here is good, it means the system is being selective.
 
 ---
 
