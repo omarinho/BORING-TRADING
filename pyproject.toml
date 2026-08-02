@@ -1,0 +1,54 @@
+[project]
+name = "korkoban"
+version = "0.1.0"
+description = "KORKOBAN — boring, rule-based, edge-only swing-trading scanner and journal for IBKR (read-only)."
+requires-python = ">=3.13"
+dependencies = [
+    "ib_insync>=0.9.86",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=9.0",
+    "pytest-cov>=7.0",
+    "freezegun>=1.5",
+    "ruff>=0.16",
+    "black>=26.0",
+    "mypy>=2.0",
+]
+
+[project.scripts]
+korkoban = "korkoban.cli:main"
+
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["korkoban*"]
+
+[tool.pytest.ini_options]
+markers = [
+    "integration: marks tests that require a real, running paper IB Gateway with Read-Only API enabled (run separately via `pytest -m integration`)",
+]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py313"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.black]
+line-length = 100
+target-version = ["py313"]
+
+[tool.mypy]
+python_version = "3.13"
+disallow_untyped_defs = true
+disallow_any_unimported = true
+warn_return_any = true
+warn_unused_ignores = true
+no_implicit_optional = true
+strict_equality = true

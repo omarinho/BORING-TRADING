@@ -1,0 +1,7 @@
+# IBKR Gateway/TWS connection parameters — copy this file to `ibkr.input` (gitignored)
+# and adjust for your local Gateway/TWS instance. Read-Only API MUST be enabled in
+# TWS/Gateway (Configure > API > Settings > check "Read-Only API") before running the
+# integration test tier (`pytest -m integration`) or the live scanner — see README.md.
+host=127.0.0.1
+port=4002
+client_id=17
