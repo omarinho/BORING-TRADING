@@ -7,13 +7,17 @@ exactly the way `korkoban.cli scan` evaluates one live day — just looped over 
 of stopping at the most recent bar. Answers "is 0 signals today expected, or is something
 broken?" with a base rate instead of a guess.
 
-Scope: fixed futures universe only (config.FUTURES_SYMBOLS). The stock side of the scanner
-depends on IBKR's live TOP_PERC_GAIN scanner result for eligibility, which has no historical
-equivalent to replay, so it's out of scope here.
+Defaults to the fixed futures universe (config.FUTURES_SYMBOLS). Can also check individual
+stock symbols via --asset-class stock — the Setup 1/2 math itself is the same pure function of
+OHLCV bars either way. What can't be backtested is the *daily scanner eligibility* for stocks
+(IBKR's live TOP_PERC_GAIN result has no historical equivalent to replay) — so a stock run here
+answers "how often would Setup 1/2 have fired on this symbol's own history", not "how often
+would this symbol have been in the scanner's candidate list that day".
 
 Usage:
     .venv/Scripts/python.exe scripts/backtest_setups.py
     .venv/Scripts/python.exe scripts/backtest_setups.py --duration "10 Y" --symbols ES,NQ
+    .venv/Scripts/python.exe scripts/backtest_setups.py --asset-class stock --symbols PLTR
 """
 
 from __future__ import annotations
@@ -68,7 +72,13 @@ def main() -> int:
     parser.add_argument(
         "--symbols",
         default=",".join(config.FUTURES_SYMBOLS),
-        help=f"Comma-separated futures symbols (default: {','.join(config.FUTURES_SYMBOLS)})",
+        help=f"Comma-separated symbols (default: {','.join(config.FUTURES_SYMBOLS)})",
+    )
+    parser.add_argument(
+        "--asset-class",
+        choices=("futures", "stock"),
+        default="futures",
+        help="Which historical-bars source to use (default: futures)",
     )
     parser.add_argument(
         "--duration", default="5 Y", help="IBKR historical duration string (default: '5 Y')"
@@ -96,7 +106,11 @@ def main() -> int:
 
     try:
         for symbol in symbols:
-            bars = client.historical_futures_bars(symbol, duration=args.duration)
+            bars = (
+                client.historical_futures_bars(symbol, duration=args.duration)
+                if args.asset_class == "futures"
+                else client.historical_stock_bars(symbol, duration=args.duration)
+            )
             evaluable_days = max(0, len(bars) - min_required + 1)
             total_evaluable_days += evaluable_days
 
