@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
+from datetime import date as _date
 
 from korkoban import config
 
@@ -31,6 +32,7 @@ class Setup1Signal:
     direction: str
     entry_price: float
     atr14: float
+    date: str
 
 
 @dataclass(frozen=True)
@@ -117,7 +119,9 @@ def is_breakout(bars: list[Bar]) -> Setup1Signal | None:
     if not current_atr < cutoff:
         return None
 
-    return Setup1Signal(direction=direction, entry_price=current.close, atr14=current_atr)
+    return Setup1Signal(
+        direction=direction, entry_price=current.close, atr14=current_atr, date=current.date
+    )
 
 
 def is_pullback(bars: list[Bar], prior_breakout: Setup1Signal | None) -> Setup2Signal | None:
@@ -127,16 +131,28 @@ def is_pullback(bars: list[Bar], prior_breakout: Setup1Signal | None) -> Setup2S
     direction = prior_breakout.direction
     current = bars[-1]
 
+    # A breakout older than PULLBACK_BREAKOUT_MAX_AGE_DAYS no longer pairs with a fresh
+    # signal — otherwise a single old breakout can keep re-triggering indefinitely off swing
+    # highs/lows made long after its own impulse.
+    age_days = (_date.fromisoformat(current.date) - _date.fromisoformat(prior_breakout.date)).days
+    if age_days > config.PULLBACK_BREAKOUT_MAX_AGE_DAYS:
+        return None
+
+    # Scoped to bars from the breakout day forward: searching the full history would let an
+    # old breakout keep pairing with "pullback" signals off swing highs/lows made long after
+    # its own impulse, rather than a retracement of that impulse.
+    bars_since_breakout = [bar for bar in bars if bar.date >= prior_breakout.date]
+
     if direction == "long":
-        extreme = max(bar.high for bar in bars)
-        extreme_bar = max(bars, key=lambda bar: bar.high)
+        extreme = max(bar.high for bar in bars_since_breakout)
+        extreme_bar = max(bars_since_breakout, key=lambda bar: bar.high)
         impulse_size = extreme - prior_breakout.entry_price
         if impulse_size <= 0:
             return None
         retracement_pct = (extreme - current.close) / impulse_size
     else:
-        extreme = min(bar.low for bar in bars)
-        extreme_bar = min(bars, key=lambda bar: bar.low)
+        extreme = min(bar.low for bar in bars_since_breakout)
+        extreme_bar = min(bars_since_breakout, key=lambda bar: bar.low)
         impulse_size = prior_breakout.entry_price - extreme
         if impulse_size <= 0:
             return None

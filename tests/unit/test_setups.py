@@ -190,8 +190,15 @@ def _pullback_bars(
     return bars
 
 
-def _pullback_prior_breakout() -> Setup1Signal:
-    return Setup1Signal(direction="long", entry_price=_PULLBACK_ENTRY_PRICE, atr14=1.0)
+# The bar whose close matches _PULLBACK_ENTRY_PRICE (last base-phase bar, mid=base_high=1000)
+# is the natural breakout day for these fixtures.
+_PULLBACK_BREAKOUT_DATE = _dates(_BASE_BAR_COUNT)[-1]
+
+
+def _pullback_prior_breakout(breakout_date: str = _PULLBACK_BREAKOUT_DATE) -> Setup1Signal:
+    return Setup1Signal(
+        direction="long", entry_price=_PULLBACK_ENTRY_PRICE, atr14=1.0, date=breakout_date
+    )
 
 
 def test_valid_pullback_within_retracement_band_returns_signal() -> None:
@@ -238,3 +245,39 @@ def test_pullback_fails_when_close_through_ma_against_trend() -> None:
     # TC-003-08 — base phase raised near the peak so the 20d MA sits above the pullback close
     bars = _pullback_bars(0.44, base_low=1030.0, base_high=1040.0)
     assert is_pullback(bars, _pullback_prior_breakout()) is None
+
+
+def test_pullback_extreme_search_excludes_bars_before_the_breakout_date() -> None:
+    # A huge high dated before the breakout must not corrupt the impulse-extreme search: only
+    # bars from the breakout day forward are eligible. Without the date-scoping, this spike
+    # would become "extreme" instead of the real 1050 impulse high, blowing the retracement
+    # far outside the valid band and wrongly returning None.
+    bars = _pullback_bars(0.44)
+    spike_date = (date.fromisoformat(_PULLBACK_BREAKOUT_DATE) - timedelta(days=1)).isoformat()
+    spike = _bar(spike_date, 5000.0, 1.0, _BASELINE_VOLUME)
+    bars_with_spike = [spike, *bars]
+
+    assert is_pullback(bars_with_spike, _pullback_prior_breakout()) is not None
+
+
+def test_pullback_fails_when_breakout_older_than_max_age() -> None:
+    # A breakout further back than PULLBACK_BREAKOUT_MAX_AGE_DAYS no longer pairs with a
+    # fresh pullback signal — otherwise a single old breakout could keep re-triggering off
+    # swing highs/lows made long after its own impulse.
+    bars = _pullback_bars(0.44)
+    stale_date = (
+        date.fromisoformat(bars[-1].date)
+        - timedelta(days=config.PULLBACK_BREAKOUT_MAX_AGE_DAYS + 1)
+    ).isoformat()
+    prior_breakout = _pullback_prior_breakout(breakout_date=stale_date)
+    assert is_pullback(bars, prior_breakout) is None
+
+
+def test_pullback_signal_when_breakout_exactly_at_max_age_boundary() -> None:
+    # Exactly at the max-age boundary is still valid (inclusive), only strictly older expires.
+    bars = _pullback_bars(0.44)
+    boundary_date = (
+        date.fromisoformat(bars[-1].date) - timedelta(days=config.PULLBACK_BREAKOUT_MAX_AGE_DAYS)
+    ).isoformat()
+    prior_breakout = _pullback_prior_breakout(breakout_date=boundary_date)
+    assert is_pullback(bars, prior_breakout) is not None

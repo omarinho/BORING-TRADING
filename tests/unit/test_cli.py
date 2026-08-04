@@ -638,8 +638,21 @@ def test_scan_command_emits_pullback_alert_when_prior_breakout_persisted(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     breakout_state_path = tmp_path / "breakout_state.json"
+    # Matches the last base-phase bar (close=1000=entry_price) in _clean_long_pullback_bars,
+    # the natural breakout day for that fixture — recent enough to satisfy the pullback's
+    # PULLBACK_BREAKOUT_MAX_AGE_DAYS expiration check.
+    breakout_date = _scan_dates(40)[-1]
     breakout_state_path.write_text(
-        json.dumps({"ES": {"direction": "long", "entry_price": 1000.0, "atr14": 1.0}}),
+        json.dumps(
+            {
+                "ES": {
+                    "direction": "long",
+                    "entry_price": 1000.0,
+                    "atr14": 1.0,
+                    "date": breakout_date,
+                }
+            }
+        ),
         encoding="utf-8",
     )
     client = _FakeScanClient({"ES": _clean_long_pullback_bars()})

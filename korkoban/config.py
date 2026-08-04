@@ -19,6 +19,10 @@ ATR_PERCENTILE_WINDOW_DAYS: int = 252
 ATR_PERCENTILE_CUTOFF: float = 90.0  # ATR14 must be strictly below this percentile
 RETRACEMENT_MIN_PCT: float = 0.38
 RETRACEMENT_MAX_PCT: float = 0.50
+# A breakout older than this can no longer pair with a fresh Setup-2 signal — without a cutoff,
+# a single old breakout can keep re-pairing with swing highs/lows made many months later, which
+# is a pullback within an extended trend, not a retracement of that breakout's own impulse.
+PULLBACK_BREAKOUT_MAX_AGE_DAYS: int = 20
 
 # ─── Position sizing ─────────────────────────────────────────────────────────
 RISK_PCT_DEFAULT: float = 0.005
