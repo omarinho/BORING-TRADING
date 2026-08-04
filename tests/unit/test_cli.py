@@ -475,14 +475,12 @@ class _FakeScanClient:
     def __init__(
         self,
         bars_by_symbol: dict[str, list[setups.Bar]] | None = None,
-        stock_symbols: list[str] | None = None,
         stock_bars_by_symbol: dict[str, list[setups.Bar]] | None = None,
         stock_spread_by_symbol: dict[str, float] | None = None,
         stock_adv_by_symbol: dict[str, float] | None = None,
         net_liq: float | None = None,
     ) -> None:
         self._bars_by_symbol = bars_by_symbol or {}
-        self._stock_symbols = stock_symbols or []
         self._stock_bars_by_symbol = stock_bars_by_symbol or {}
         self._stock_spread_by_symbol = stock_spread_by_symbol or {}
         self._stock_adv_by_symbol = stock_adv_by_symbol or {}
@@ -503,9 +501,6 @@ class _FakeScanClient:
     ) -> list[setups.Bar]:
         return self._stock_bars_by_symbol.get(symbol, [])
 
-    def stock_candidate_symbols(self) -> list[str]:
-        return self._stock_symbols
-
     def stock_bid_ask_spread_pct(self, symbol: str) -> float:
         if symbol not in self._stock_spread_by_symbol:
             raise ValueError(f"no live quote for {symbol}")
@@ -518,6 +513,14 @@ class _FakeScanClient:
 
     def disconnect(self) -> None:
         pass
+
+
+def _write_stock_universe(tmp_path: Path, symbols: list[str]) -> Path:
+    """Writes a small test-controlled stock-universe file, matching cli._load_stock_universe's
+    format — isolates these tests from the real data/stock_universe.json's content."""
+    path = tmp_path / "stock_universe.json"
+    path.write_text(json.dumps({"symbols": symbols}), encoding="utf-8")
+    return path
 
 
 def _scan_dates(n: int) -> list[str]:
@@ -552,6 +555,33 @@ def _clean_long_breakout_bars() -> list[setups.Bar]:
     true_ranges = [1.0] * n
     for i in range(1, 40):
         true_ranges[i] = 5.0  # past high-ATR block sets the trailing-252d 90th percentile at 5.0
+
+    volumes = [100_000.0] * n
+    volumes[-1] = 2.0 * 100_000.0
+
+    return [
+        _scan_bar(d, m, tr, v)
+        for d, m, tr, v in zip(dates, mids, true_ranges, volumes, strict=True)
+    ]
+
+
+def _clean_short_breakout_bars() -> list[setups.Bar]:
+    """Mirrors _clean_long_breakout_bars with the trend/jump direction flipped — a minimal
+    bar series satisfying all four Setup-1 conditions for a SHORT breakout. Used to prove the
+    fixed stock universe can surface a short candidate, unlike the old TOP_PERC_GAIN-only
+    scanner source, which could never return a stock breaking its 20-day low.
+    """
+    n = config.ATR_PERIOD + config.ATR_PERCENTILE_WINDOW_DAYS + 1
+    dates = _scan_dates(n)
+    trend_rate = -0.002
+    base_price = 1000.0
+
+    mids = [base_price + trend_rate * i for i in range(n - 1)]
+    mids.append(base_price + trend_rate * (n - 1) - 2.0)  # jump clears the prior 20d low
+
+    true_ranges = [1.0] * n
+    for i in range(1, 40):
+        true_ranges[i] = 5.0
 
     volumes = [100_000.0] * n
     volumes[-1] = 2.0 * 100_000.0
@@ -1379,7 +1409,6 @@ def test_scan_command_emits_stock_alert_when_candidate_eligible_and_breaks_out(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     client = _FakeScanClient(
-        stock_symbols=["AAPL"],
         stock_bars_by_symbol={"AAPL": _clean_long_breakout_bars()},
         stock_spread_by_symbol={"AAPL": 0.0003},  # under STOCK_SPREAD_MAX_PCT (0.0005)
         stock_adv_by_symbol={"AAPL": 6_000_000.0},  # over STOCK_ADV_MIN_SHARES (5,000,000)
@@ -1392,6 +1421,8 @@ def test_scan_command_emits_stock_alert_when_candidate_eligible_and_breaks_out(
             str(tmp_path / "breakout_state.json"),
             "--journal-path",
             str(tmp_path / "trade_journal.jsonl"),
+            "--stock-universe-path",
+            str(_write_stock_universe(tmp_path, ["AAPL"])),
         ],
         client_factory=lambda _path: client,
     )
@@ -1401,11 +1432,40 @@ def test_scan_command_emits_stock_alert_when_candidate_eligible_and_breaks_out(
     assert "ALERT: AAPL setup=1 direction=long" in captured.out
 
 
+def test_scan_command_emits_stock_short_alert_from_fixed_universe(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # Regression: a live TOP_PERC_GAIN-only scanner source could never return a stock
+    # breaking its 20-day low (it only ever lists today's biggest % gainers) — the fixed
+    # S&P 500 + Nasdaq 100 universe has no such directional bias.
+    client = _FakeScanClient(
+        stock_bars_by_symbol={"XOM": _clean_short_breakout_bars()},
+        stock_spread_by_symbol={"XOM": 0.0003},
+        stock_adv_by_symbol={"XOM": 6_000_000.0},
+    )
+
+    exit_code = cli.main(
+        [
+            "scan",
+            "--breakout-state-path",
+            str(tmp_path / "breakout_state.json"),
+            "--journal-path",
+            str(tmp_path / "trade_journal.jsonl"),
+            "--stock-universe-path",
+            str(_write_stock_universe(tmp_path, ["XOM"])),
+        ],
+        client_factory=lambda _path: client,
+    )
+
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert "ALERT: XOM setup=1 direction=short" in captured.out
+
+
 def test_scan_command_excludes_stock_candidate_when_spread_too_wide(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     client = _FakeScanClient(
-        stock_symbols=["AAPL"],
         stock_bars_by_symbol={"AAPL": _clean_long_breakout_bars()},
         stock_spread_by_symbol={"AAPL": 0.0006},  # over STOCK_SPREAD_MAX_PCT (0.0005)
         stock_adv_by_symbol={"AAPL": 6_000_000.0},
@@ -1418,6 +1478,8 @@ def test_scan_command_excludes_stock_candidate_when_spread_too_wide(
             str(tmp_path / "breakout_state.json"),
             "--journal-path",
             str(tmp_path / "trade_journal.jsonl"),
+            "--stock-universe-path",
+            str(_write_stock_universe(tmp_path, ["AAPL"])),
         ],
         client_factory=lambda _path: client,
     )
@@ -1431,7 +1493,6 @@ def test_scan_command_excludes_stock_candidate_when_adv_too_low(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     client = _FakeScanClient(
-        stock_symbols=["AAPL"],
         stock_bars_by_symbol={"AAPL": _clean_long_breakout_bars()},
         stock_spread_by_symbol={"AAPL": 0.0003},
         stock_adv_by_symbol={"AAPL": 4_000_000.0},  # under STOCK_ADV_MIN_SHARES (5,000,000)
@@ -1444,6 +1505,8 @@ def test_scan_command_excludes_stock_candidate_when_adv_too_low(
             str(tmp_path / "breakout_state.json"),
             "--journal-path",
             str(tmp_path / "trade_journal.jsonl"),
+            "--stock-universe-path",
+            str(_write_stock_universe(tmp_path, ["AAPL"])),
         ],
         client_factory=lambda _path: client,
     )
@@ -1456,10 +1519,9 @@ def test_scan_command_excludes_stock_candidate_when_adv_too_low(
 def test_scan_command_skips_stock_candidate_with_no_live_quote(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    # AAPL is returned by the scanner but has no entry in stock_spread_by_symbol, so
+    # AAPL is in the universe but has no entry in stock_spread_by_symbol, so
     # stock_bid_ask_spread_pct raises ValueError -> the candidate is skipped, not fatal.
     client = _FakeScanClient(
-        stock_symbols=["AAPL"],
         stock_bars_by_symbol={"AAPL": _clean_long_breakout_bars()},
         stock_adv_by_symbol={"AAPL": 6_000_000.0},
     )
@@ -1471,6 +1533,8 @@ def test_scan_command_skips_stock_candidate_with_no_live_quote(
             str(tmp_path / "breakout_state.json"),
             "--journal-path",
             str(tmp_path / "trade_journal.jsonl"),
+            "--stock-universe-path",
+            str(_write_stock_universe(tmp_path, ["AAPL"])),
         ],
         client_factory=lambda _path: client,
     )

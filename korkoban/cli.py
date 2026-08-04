@@ -25,6 +25,13 @@ from korkoban.journal import DEFAULT_JOURNAL_PATH, TradeJournalEntry
 # a later scan can detect a Setup 2 pullback that follows a breakout confirmed on a prior day.
 DEFAULT_BREAKOUT_STATE_PATH = "data/breakout_state.json"
 
+# Maintained S&P 500 + Nasdaq 100 ticker union (REQ-005) — a fixed, hand-updated base pool
+# that spread/ADV eligibility filters from. Replaces a live TOP_PERC_GAIN scanner query, which
+# biased the candidate pool toward small, volatile, wide-spread names (the opposite of what the
+# liquidity filter wants) and structurally could never surface a short-side candidate, since a
+# stock breaking its 20-day low in a downtrend never appears on a "biggest gainers today" list.
+DEFAULT_STOCK_UNIVERSE_PATH = "data/stock_universe.json"
+
 
 class _ConnectedClient(Protocol):
     """Structural interface cli.py needs from a connected client — satisfied by the real
@@ -38,8 +45,6 @@ class _ConnectedClient(Protocol):
     def historical_stock_bars(
         self, symbol: str, duration: str = "2 Y", bar_size: str = "1 day"
     ) -> list[setups.Bar]: ...
-
-    def stock_candidate_symbols(self) -> list[str]: ...
 
     def stock_bid_ask_spread_pct(self, symbol: str) -> float: ...
 
@@ -61,6 +66,7 @@ def _build_parser() -> argparse.ArgumentParser:
     scan_parser.add_argument("--circuit-breaker-path", default=DEFAULT_CIRCUIT_BREAKER_STATE_PATH)
     scan_parser.add_argument("--breakout-state-path", default=DEFAULT_BREAKOUT_STATE_PATH)
     scan_parser.add_argument("--journal-path", default=DEFAULT_JOURNAL_PATH)
+    scan_parser.add_argument("--stock-universe-path", default=DEFAULT_STOCK_UNIVERSE_PATH)
 
     size_parser = subparsers.add_parser("size", help="Compute a position size")
     size_parser.add_argument(
@@ -430,13 +436,23 @@ def _scan_futures_universe(client: object, state: dict[str, setups.Setup1Signal]
     return alerts
 
 
-def _stock_candidates(scan_client: _ConnectedClient) -> list[universe.StockCandidate]:
-    """Builds StockCandidate rows from live scanner symbols + per-symbol spread/ADV reads.
+def _load_stock_universe(path: str) -> list[str]:
+    """Reads the maintained S&P 500 + Nasdaq 100 ticker union — the fixed base pool that
+    spread/ADV eligibility filters from (REQ-005)."""
+    with Path(path).open("r", encoding="utf-8") as f:
+        data = json.load(f)
+    return list(data["symbols"])
+
+
+def _stock_candidates(
+    scan_client: _ConnectedClient, symbols: list[str]
+) -> list[universe.StockCandidate]:
+    """Builds StockCandidate rows from the fixed stock universe + per-symbol spread/ADV reads.
     A symbol with no live quote or no volume history right now is skipped, not fatal — the
     scan still covers everything it can get real data for.
     """
     candidates: list[universe.StockCandidate] = []
-    for symbol in scan_client.stock_candidate_symbols():
+    for symbol in symbols:
         try:
             spread_pct = scan_client.stock_bid_ask_spread_pct(symbol)
             avg_daily_volume = scan_client.stock_average_daily_volume(symbol)
@@ -453,15 +469,19 @@ def _stock_candidates(scan_client: _ConnectedClient) -> list[universe.StockCandi
     return candidates
 
 
-def _scan_stock_universe(client: object, state: dict[str, setups.Setup1Signal]) -> list[_Alert]:
-    """Live scanner candidates -> universe.filter_stock_universe() eligibility -> the same
-    setup-detection loop as futures. `state` is shared with `_scan_futures_universe` (symbol
+def _scan_stock_universe(
+    client: object, state: dict[str, setups.Setup1Signal], symbols: list[str]
+) -> list[_Alert]:
+    """Fixed S&P 500 + Nasdaq 100 universe -> universe.filter_stock_universe() eligibility ->
+    the same setup-detection loop as futures, in both directions — unlike a top-gainers-only
+    scanner source, this can surface a short Setup 1 (breaking a 20-day low in a downtrend)
+    just as readily as a long one. `state` is shared with `_scan_futures_universe` (symbol
     strings don't collide across the two universes) and persisted once by the caller.
     """
     scan_client = cast(_ConnectedClient, client)
     alerts: list[_Alert] = []
 
-    for candidate in universe.filter_stock_universe(_stock_candidates(scan_client)):
+    for candidate in universe.filter_stock_universe(_stock_candidates(scan_client, symbols)):
         bars = scan_client.historical_stock_bars(candidate.symbol)
         try:
             breakout = setups.is_breakout(
@@ -502,8 +522,9 @@ def _cmd_scan(args: argparse.Namespace, client_factory: Callable[[str], object])
             return 0
 
         breakout_state = _load_breakout_state(args.breakout_state_path)
+        stock_universe = _load_stock_universe(args.stock_universe_path)
         alerts = _scan_futures_universe(client, breakout_state) + _scan_stock_universe(
-            client, breakout_state
+            client, breakout_state, stock_universe
         )
         _save_breakout_state(args.breakout_state_path, breakout_state)
 
