@@ -70,7 +70,9 @@ def _percentile_nearest_rank(values: list[float], pct: float) -> float:
     return ordered[index]
 
 
-def is_breakout(bars: list[Bar]) -> Setup1Signal | None:
+def is_breakout(
+    bars: list[Bar], volume_ratio_multiple: float = config.VOLUME_RATIO_MULTIPLE
+) -> Setup1Signal | None:
     min_required = config.ATR_PERIOD + config.ATR_PERCENTILE_WINDOW_DAYS + 1
     if len(bars) < min_required:
         # A short history can't support a real 252-day ATR percentile; raise instead of
@@ -94,7 +96,7 @@ def is_breakout(bars: list[Bar]) -> Setup1Signal | None:
     # single day's spike can't inflate its own baseline).
     volume_window = bars[-(config.AVG_VOLUME_LOOKBACK_DAYS + 1) : -1]
     avg_volume = sum(bar.volume for bar in volume_window) / len(volume_window)
-    if current.volume < config.VOLUME_RATIO_MULTIPLE * avg_volume:
+    if current.volume < volume_ratio_multiple * avg_volume:
         return None
 
     # Condition 3: 100d SMA slope, measured strictly before today (excludes the current

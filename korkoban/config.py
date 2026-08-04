@@ -23,6 +23,19 @@ RETRACEMENT_MAX_PCT: float = 0.50
 # a single old breakout can keep re-pairing with swing highs/lows made many months later, which
 # is a pullback within an extended trend, not a retracement of that breakout's own impulse.
 PULLBACK_BREAKOUT_MAX_AGE_DAYS: int = 20
+# NQ/YM rarely spike volume 1.8x on a breakout day even when they break range often — their
+# volume is driven by steady index-arb/rebalancing flow rather than event-driven spikes
+# (measured: NQ/YM break range 85/64 times per 5y but clear 1.8x volume on only 3/4 of those
+# days). Lowered specifically for these two rather than loosening the global default, which
+# would also loosen ES/RTY/GC/CL.
+VOLUME_RATIO_MULTIPLE_OVERRIDES: dict[str, float] = {
+    "NQ": 1.5,
+    "YM": 1.5,
+}
+
+
+def volume_ratio_multiple_for(symbol: str) -> float:
+    return VOLUME_RATIO_MULTIPLE_OVERRIDES.get(symbol, VOLUME_RATIO_MULTIPLE)
 
 # ─── Position sizing ─────────────────────────────────────────────────────────
 RISK_PCT_DEFAULT: float = 0.005

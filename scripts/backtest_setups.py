@@ -39,22 +39,23 @@ _Setup1Hits = list[tuple[str, setups.Setup1Signal]]
 _Setup2Hits = list[tuple[str, setups.Setup2Signal]]
 
 
-def backtest_symbol(bars: list[setups.Bar]) -> tuple[_Setup1Hits, _Setup2Hits]:
+def backtest_symbol(symbol: str, bars: list[setups.Bar]) -> tuple[_Setup1Hits, _Setup2Hits]:
     """Replays one symbol's bar history day by day, mirroring cli.py's live scan logic:
     a Setup 1 hit on a given day updates the tracked breakout state and is not also checked
     for Setup 2 that same day; otherwise Setup 2 is checked against the last confirmed
-    breakout, if any.
+    breakout, if any. Uses the same per-symbol volume-ratio override cli.py's scan applies.
     """
     min_required = _min_required_bars()
     setup1_hits: _Setup1Hits = []
     setup2_hits: _Setup2Hits = []
     last_breakout: setups.Setup1Signal | None = None
+    volume_ratio_multiple = config.volume_ratio_multiple_for(symbol)
 
     for end in range(min_required, len(bars) + 1):
         window = bars[:end]
         today = window[-1]
 
-        breakout = setups.is_breakout(window)
+        breakout = setups.is_breakout(window, volume_ratio_multiple=volume_ratio_multiple)
         if breakout is not None:
             last_breakout = breakout
             setup1_hits.append((today.date, breakout))
@@ -118,7 +119,7 @@ def main() -> int:
                 print(f"{symbol}: {len(bars)} bars — not enough history to evaluate even once")
                 continue
 
-            setup1_hits, setup2_hits = backtest_symbol(bars)
+            setup1_hits, setup2_hits = backtest_symbol(symbol, bars)
             total_setup1 += len(setup1_hits)
             total_setup2 += len(setup2_hits)
 

@@ -132,6 +132,14 @@ def test_breakout_raises_value_error_when_history_too_short() -> None:
         is_breakout(bars)
 
 
+def test_breakout_volume_ratio_multiple_is_overridable() -> None:
+    # TC-002-10 — 1.6x fails the global 1.8x default but passes an explicit 1.5x override
+    # (the mechanism cli.py uses for config.VOLUME_RATIO_MULTIPLE_OVERRIDES).
+    bars = _breakout_bars(direction="long", current_volume_ratio=1.6)
+    assert is_breakout(bars) is None
+    assert is_breakout(bars, volume_ratio_multiple=1.5) is not None
+
+
 def test_no_signal_when_bars_match_neither_setup() -> None:
     # TC-004-01
     bars = _breakout_bars(direction="long", trend_rate=0.0, jump=None, current_volume_ratio=1.0)

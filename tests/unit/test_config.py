@@ -60,6 +60,15 @@ def test_gitignore_excludes_ibkr_input() -> None:
     assert "ibkr.input" in gitignore.splitlines()
 
 
+def test_volume_ratio_multiple_for_uses_override_when_present() -> None:
+    assert config.volume_ratio_multiple_for("NQ") == config.VOLUME_RATIO_MULTIPLE_OVERRIDES["NQ"]
+    assert config.volume_ratio_multiple_for("YM") == config.VOLUME_RATIO_MULTIPLE_OVERRIDES["YM"]
+
+
+def test_volume_ratio_multiple_for_falls_back_to_global_default() -> None:
+    assert config.volume_ratio_multiple_for("ES") == config.VOLUME_RATIO_MULTIPLE
+
+
 def test_futures_point_values_cover_full_universe_incl_micros() -> None:
     # TC-021-01: config.py exposes full point-value mapping incl. micros
     for symbol in config.FUTURES_SYMBOLS:

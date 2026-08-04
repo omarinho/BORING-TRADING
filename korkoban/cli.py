@@ -409,7 +409,9 @@ def _scan_futures_universe(client: object, state: dict[str, setups.Setup1Signal]
     for symbol in universe.FUTURES_UNIVERSE:
         bars = scan_client.historical_futures_bars(symbol)
         try:
-            breakout = setups.is_breakout(bars)
+            breakout = setups.is_breakout(
+                bars, volume_ratio_multiple=config.volume_ratio_multiple_for(symbol)
+            )
         except ValueError:
             # Insufficient trailing history for a fresh Setup-1 read on this symbol — Setup 2
             # has a lower data requirement (see setups.is_pullback), so still check it below
@@ -462,7 +464,9 @@ def _scan_stock_universe(client: object, state: dict[str, setups.Setup1Signal]) 
     for candidate in universe.filter_stock_universe(_stock_candidates(scan_client)):
         bars = scan_client.historical_stock_bars(candidate.symbol)
         try:
-            breakout = setups.is_breakout(bars)
+            breakout = setups.is_breakout(
+                bars, volume_ratio_multiple=config.volume_ratio_multiple_for(candidate.symbol)
+            )
         except ValueError:
             breakout = None
 
