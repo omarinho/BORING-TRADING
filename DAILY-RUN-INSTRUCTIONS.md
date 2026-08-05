@@ -274,6 +274,30 @@ range — a high number here is good, it means the system is being selective.
 
 ---
 
+## Refreshing the stock universe (optional, weekends)
+
+`data/stock_universe.json` is hand-maintained, not auto-updated by `scan` — index
+membership only changes on rebalances, so there's no need to check it daily. A good rhythm
+is to run this once over the weekend, after Friday's weekly review, so any change gets a
+full week of normal scanning before the next refresh:
+
+```bash
+.venv/Scripts/python.exe scripts/refresh_stock_universe.py
+```
+
+This re-pulls the S&P 500 and Nasdaq 100 constituent lists from their sources, prints what
+was **added**/**removed** compared to the committed file, and overwrites
+`data/stock_universe.json` in place — it does **not** commit anything itself. Most weeks it
+will print `No changes.`; that's expected, index rebalances are infrequent. Review the
+`git diff` (the added/removed tickers printed should match it exactly) and commit it
+yourself, same as any other change — no different from every other fix in this project.
+
+If the script raises an error instead of printing a result, it means one of the two source
+CSVs came back truncated or restructured — it deliberately aborts without touching the file
+rather than risk shrinking your trading universe from a bad fetch.
+
+---
+
 ## Common issues
 
 - **"Could not connect to IBKR Gateway"** → Gateway/TWS isn't running or isn't logged in.
