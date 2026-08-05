@@ -98,12 +98,21 @@ computed for real via `exits.compute_initial_stop`/`compute_target`, not just th
 
 - **Futures** (ES, NQ, YM, RTY, GC, CL): ~2 years of daily bars per symbol via
   `IBKRClient.historical_futures_bars`.
-- **Stocks**: `IBKRClient.stock_candidate_symbols()` pulls live scanner candidates, each is
-  read for a live bid/ask spread (`stock_bid_ask_spread_pct`) and 50-day average volume
-  (`stock_average_daily_volume`) — a candidate with no live quote or no volume history right
-  now is skipped, not fatal. Candidates are filtered through the real
-  `universe.filter_stock_universe()` (spread < 0.05%, ADV > 5,000,000 shares), and only
-  eligible symbols get a `historical_stock_bars` pull + setup-detection pass.
+- **Stocks**: the candidate pool is the fixed ticker list in `data/stock_universe.json`
+  (S&P 500 ∪ Nasdaq 100, ~516 symbols, hand-maintained — see `--stock-universe-path` to point
+  at a different file). This is a static membership list, not a "today's biggest movers"
+  scanner, so it supports long **and short** signals in either direction, matching the
+  100-day-trend edge (REQ-005) instead of a gainers-only bias. Each symbol is read for a
+  spread (`stock_bid_ask_spread_pct`) and 50-day average volume (`stock_average_daily_volume`)
+  — a candidate with no tick/volume history right now is skipped, not fatal. The spread is
+  read from the **last historical BID_ASK tick of the most recently completed regular
+  session** (`reqHistoricalTicks`, not a live quote), because the daily routine always runs
+  after the close (see `DAILY-RUN-INSTRUCTIONS.md`) — a live snapshot at that hour would be an
+  after-hours quote, artificially wide for nearly every symbol except a handful of
+  extended-hours-liquid mega-caps. Candidates are filtered through the real
+  `universe.filter_stock_universe()` (spread < 0.05%, ADV > 5,000,000 shares — typically
+  ~50-80 of the 516 pass on a normal day), and only eligible symbols get a
+  `historical_stock_bars` pull + setup-detection pass.
 
 The last confirmed Setup 1 breakout per symbol (futures and stocks share the same state,
 keyed by symbol) is persisted to `data/breakout_state.json` (gitignored) so a later scan can
@@ -166,7 +175,8 @@ flags it, since the human always executes manually.
 korkoban/
   config.py        # every tunable threshold, one place — no magic numbers elsewhere
   ibkr_client.py    # the ONLY module that imports ib_insync's IB object; read-only
-  universe.py       # fixed futures universe + dynamic liquidity-filtered stock universe
+  universe.py       # fixed futures universe + the stock liquidity-eligibility filter
+                     # (candidate pool itself is data/stock_universe.json, not this module)
   setups.py         # pure Setup 1 (breakout) / Setup 2 (pullback) detection functions
   sizing.py         # position sizing math (NetLiq-based, floored)
   exits.py          # initial stop / target / management plan / time-stop (pure)
@@ -177,6 +187,9 @@ korkoban/
   cli.py            # CLI entrypoints: scan, size, journal-add, journal-eod-note,
                      # report-weekly, review-positions, circuit-breaker, win-streak,
                      # overtrading-status
+data/
+  stock_universe.json  # hand-maintained S&P 500 + Nasdaq 100 ticker union (committed,
+                        # not gitignored) — the stock scan's fixed candidate pool
 tests/
   unit/             # offline, synthetic OHLCV fixtures, no @pytest.mark.integration
   integration/       # real paper Gateway calls, marked @pytest.mark.integration

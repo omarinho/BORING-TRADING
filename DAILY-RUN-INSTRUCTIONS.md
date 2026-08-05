@@ -38,6 +38,10 @@ No need to run it more than once a day, or on weekends (no new bar forms).
 .venv/Scripts/python.exe -m korkoban.cli scan
 ```
 
+This checks ~516 stock tickers (the full S&P 500 + Nasdaq 100 list in
+`data/stock_universe.json`) plus the 6 futures, each needing a few IBKR round-trips —
+**expect it to take 15-25 minutes**, not seconds. It hasn't hung; let it finish.
+
 You'll see one of two outputs:
 
 **No signals (the most common case — the system is designed to be "boring"):**
@@ -54,8 +58,8 @@ Each line gives you: symbol, setup (1=breakout, 2=pullback), direction, suggeste
 price, ATR14, and stop/target already computed. This **is not an executed order** — it's
 the signal for you to evaluate and, if you decide to take it, execute manually in TWS.
 
-You can ignore terminal messages like `Error 162 ... API scanner subscription cancelled` —
-that's normal IBKR noise when the scanner closes after returning results, not a real error.
+You can ignore an occasional `Error 200 ... No security definition has been found` line —
+see **Common issues** below.
 
 ---
 
@@ -274,8 +278,13 @@ range — a high number here is good, it means the system is being selective.
 
 - **"Could not connect to IBKR Gateway"** → Gateway/TWS isn't running or isn't logged in.
   Open it and retry.
-- **`Error 10089` messages about data subscriptions** → your account has no live data for
-  that particular stock; the system automatically falls back to delayed data — this is
-  normal and doesn't block scanning.
+- **`Error 200 ... No security definition has been found for the request, contract:
+  Stock(symbol='XYZ', ...)`** → a ticker in `data/stock_universe.json` was delisted, renamed,
+  or acquired since the list was last refreshed. It's skipped, not fatal. If you see it often,
+  refresh the list from the sources named in the JSON file's `source` field.
+- **A candidate silently missing from the eligible set with no error line** → its spread or
+  ADV just didn't clear the bar that day (spread is read from the last regular-session tick,
+  not a live quote, so this isn't a market-hours issue) — normal, not every symbol is
+  eligible every day.
 - **"Socket disconnect" on back-to-back runs** → avoid running `scan` many times in quick
   succession; one run a day is enough and avoids saturating the IBKR connection.
