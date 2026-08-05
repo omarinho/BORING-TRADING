@@ -58,11 +58,7 @@ def test_stock_candidate_symbols_real_smoke(ibkr_gateway: GatewayConnection) -> 
 
 @pytest.mark.integration
 def test_stock_bid_ask_spread_pct_real_smoke(ibkr_gateway: GatewayConnection) -> None:
-    # A live bid/ask isn't guaranteed outside market hours — accept either a valid spread
-    # or the documented ValueError for "no live quote available" (both are correct
-    # behavior, not a test failure either way).
-    try:
-        spread_pct = ibkr_gateway.client.stock_bid_ask_spread_pct("AAPL")
-        assert spread_pct >= 0
-    except ValueError as exc:
-        assert "no live bid/ask quote available" in str(exc)
+    # Historical BID_ASK ticks from the last completed regular session, not a live quote —
+    # reliably available at any hour, including right after this test's own after-hours run.
+    spread_pct = ibkr_gateway.client.stock_bid_ask_spread_pct("AAPL")
+    assert spread_pct >= 0

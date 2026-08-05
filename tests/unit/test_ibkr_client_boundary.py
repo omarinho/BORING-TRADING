@@ -52,14 +52,3 @@ def test_connect_uses_readonly_true() -> None:
     assert kwargs["readonly"] is True
     assert mock_ib.connect.call_args.args == ("10.0.0.1", 7497)
     assert kwargs["clientId"] == 99
-
-
-def test_connect_falls_back_to_delayed_market_data() -> None:
-    # Real accounts without a live market-data subscription (common on paper accounts)
-    # reject reqTickers/reqMktData outright unless this fallback is requested — discovered
-    # against a real live Gateway, not caught by any prior mocked test.
-    connection_config = config.IBKRConnectionConfig(host="10.0.0.1", port=7497, client_id=99)
-    client = IBKRClient(connection_config)
-    with patch.object(client, "_ib", MagicMock()) as mock_ib:
-        client.connect()
-    mock_ib.reqMarketDataType.assert_called_once_with(3)

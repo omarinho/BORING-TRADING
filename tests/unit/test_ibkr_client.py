@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from korkoban import config
 from korkoban.ibkr_client import IBKRClient, load_client
@@ -115,24 +115,54 @@ def test_stock_average_daily_volume_raises_when_no_history() -> None:
     raise AssertionError("expected ValueError when no historical volume data is available")
 
 
-def test_stock_bid_ask_spread_pct_computed_from_live_ticker() -> None:
+def _fake_tick(bid: float, ask: float) -> SimpleNamespace:
+    return SimpleNamespace(priceBid=bid, priceAsk=ask)
+
+
+def test_stock_bid_ask_spread_pct_computed_from_last_historical_tick() -> None:
     client = IBKRClient(_CONNECTION_CONFIG)
-    ticker = SimpleNamespace(bid=99.0, ask=101.0)
-    with patch.object(client, "_ib", SimpleNamespace(reqTickers=lambda *_a: [ticker])):
+    # IBKR can return more ticks than numberOfTicks requests; the last one (chronologically
+    # closest to endDateTime, i.e. closest to the regular session's close) is the one that
+    # matters, not the first.
+    ticks = [_fake_tick(90.0, 92.0), _fake_tick(99.0, 101.0)]
+    with patch.object(client, "_ib", SimpleNamespace(reqHistoricalTicks=lambda *_a, **_kw: ticks)):
         spread_pct = client.stock_bid_ask_spread_pct("AAPL")
 
     assert spread_pct == (101.0 - 99.0) / 100.0
 
 
-def test_stock_bid_ask_spread_pct_raises_when_no_live_quote() -> None:
+def test_stock_bid_ask_spread_pct_passes_bid_ask_and_regular_hours_only() -> None:
     client = IBKRClient(_CONNECTION_CONFIG)
-    ticker = SimpleNamespace(bid=float("nan"), ask=float("nan"))
-    with patch.object(client, "_ib", SimpleNamespace(reqTickers=lambda *_a: [ticker])):
+    ticks = [_fake_tick(99.0, 101.0)]
+    with patch.object(
+        client, "_ib", SimpleNamespace(reqHistoricalTicks=Mock(return_value=ticks))
+    ) as fake_ib:
+        client.stock_bid_ask_spread_pct("AAPL")
+
+    _, kwargs = fake_ib.reqHistoricalTicks.call_args
+    assert kwargs["whatToShow"] == "BID_ASK"
+    assert kwargs["useRth"] is True
+
+
+def test_stock_bid_ask_spread_pct_raises_when_no_ticks_available() -> None:
+    client = IBKRClient(_CONNECTION_CONFIG)
+    with patch.object(client, "_ib", SimpleNamespace(reqHistoricalTicks=lambda *_a, **_kw: [])):
         try:
             client.stock_bid_ask_spread_pct("AAPL")
         except ValueError:
             return
-    raise AssertionError("expected ValueError when no live bid/ask is available")
+    raise AssertionError("expected ValueError when no historical bid/ask ticks are available")
+
+
+def test_stock_bid_ask_spread_pct_raises_when_last_tick_has_no_valid_quote() -> None:
+    client = IBKRClient(_CONNECTION_CONFIG)
+    ticks = [_fake_tick(float("nan"), float("nan"))]
+    with patch.object(client, "_ib", SimpleNamespace(reqHistoricalTicks=lambda *_a, **_kw: ticks)):
+        try:
+            client.stock_bid_ask_spread_pct("AAPL")
+        except ValueError:
+            return
+    raise AssertionError("expected ValueError when the last tick has no valid bid/ask")
 
 
 def test_stock_candidate_symbols_extracts_symbols_from_scanner_rows() -> None:

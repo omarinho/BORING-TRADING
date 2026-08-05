@@ -6,6 +6,8 @@ submits, modifies, or cancels an order.
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
+
 from ib_insync import IB, BarData, ContFuture, Contract, ScanData, ScannerSubscription, Stock
 
 from korkoban import config, setups
@@ -24,11 +26,6 @@ class IBKRClient:
             clientId=self._connection_config.client_id,
             readonly=True,
         )
-        # Falls back to delayed market data (3) so stock_bid_ask_spread_pct still works on
-        # accounts without a live-data subscription — common on paper accounts. This is a
-        # decision-support tool built on daily bars, not latency-sensitive execution, so a
-        # delayed bid/ask for the spread-eligibility check is an acceptable trade-off.
-        self._ib.reqMarketDataType(3)
 
     def disconnect(self) -> None:
         self._ib.disconnect()
@@ -106,14 +103,28 @@ class IBKRClient:
     def stock_bid_ask_spread_pct(
         self, symbol: str, exchange: str = "SMART", currency: str = "USD"
     ) -> float:
-        # reqTickers is ib_insync's blocking, synchronous snapshot helper — it waits for the
-        # ticker to populate before returning, unlike the async reqMktData + event-callback path.
+        # Historical BID_ASK ticks, not a live reqTickers snapshot: the daily routine runs
+        # after the close (DAILY-RUN-INSTRUCTIONS.md), so a live quote would be an after-hours
+        # one — artificially wide for all but a handful of extended-hours-liquid names. Passing
+        # useRth=True walks the request backward past any after-hours/weekend/holiday gap to
+        # the last tick of the most recently completed regular session, mirroring how OHLCV/
+        # volume already only ever see settled RTH bars.
         contract = Stock(symbol, exchange, currency)
-        ticker = self._ib.reqTickers(contract)[0]
-        bid, ask = ticker.bid, ticker.ask
+        now = datetime.now(UTC).strftime("%Y%m%d %H:%M:%S UTC")
+        ticks = self._ib.reqHistoricalTicks(
+            contract,
+            startDateTime="",
+            endDateTime=now,
+            numberOfTicks=1,
+            whatToShow="BID_ASK",
+            useRth=True,
+        )
+        if not ticks:
+            raise ValueError(f"no historical bid/ask ticks available for {symbol}")
+        bid, ask = float(ticks[-1].priceBid), float(ticks[-1].priceAsk)
         if not (bid > 0 and ask > 0):  # NaN comparisons are always False, so this also
-            # catches ib_insync's "no live quote" sentinel (NaN bid/ask)
-            raise ValueError(f"no live bid/ask quote available for {symbol}")
+            # catches ib_insync's "no data" sentinel (NaN bid/ask)
+            raise ValueError(f"no valid bid/ask tick available for {symbol}")
         mid = (bid + ask) / 2
         return (ask - bid) / mid
 
